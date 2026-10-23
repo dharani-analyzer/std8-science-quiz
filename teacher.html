@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Teacher · Std 8 Science Tests</title>
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div id="app"></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+const KEY="q8_tkey";
+const T={key:ls.get(KEY,""),d:null,tab:"analytics",err:"",
+  an:{paper:"all",cls:"all",mode:"first",stu:null,allQ:false,showMissing:false},
+  st:{cls:"all",q:""},edit:null};
+
+/* ---------- data ---------- */
+async function load(){
+  const had=!!T.d;
+  try{T.d=await api("tAll",{key:T.key});T.err="";lastLoad=Date.now();}
+  catch(e){if(e.server&&/key/i.test(e.message)){T.key="";ls.del(KEY);T.d=null;}T.err=e.message;}
+  const ae=document.activeElement,typing=ae&&ae.id&&/INPUT|TEXTAREA/.test(ae.tagName)&&!document.getElementById("modal");
+  if(typing&&had&&T.d&&!T.err)return;   // don't wipe what the teacher is typing; data is used on next render
+  render(true);
+}
+function pState(p,t){t=t||now();if(p.status==="draft")return"draft";if(p.status==="closed")return"closed";if(p.opens&&t<p.opens)return"upcoming";if(p.closes&&t>p.closes)return"closed";return"open";}
+const STATE_TAG={draft:'<span class="tag">Draft</span>',open:'<span class="tag ok">Open</span>',upcoming:'<span class="tag pri">Scheduled</span>',closed:'<span class="tag bad">Closed</span>'};
+const modeTag=p=>p.mode==="test"?`<span class="tag warn">Test${p.limit?` · ${p.limit} min`:""}</span>`:`<span class="tag pri">Practice</span>`;
+const PM=()=>{const m={};(T.d?T.d.papers:[]).forEach(p=>m[p.id]=p);return m;};
+const SM=()=>{const m={};(T.d?T.d.students:[]).forEach(s=>m[s.id]=s);return m;};
+const activeStudents=()=>T.d.students.filter(s=>s.status!=="removed");
+const classesSeen=()=>[...new Set(T.d.settings.classes.concat(activeStudents().map(s=>s.cls)))].filter(String).sort();
+const stuLabel=s=>s?`${esc(s.name)} <span class="muted small">${esc(s.cls)}-${esc(s.roll)}</span>`:'<span class="muted">Unknown student</span>';
+
+/* ---------- layout ---------- */
+function header(){
+  const tab=(k,l)=>`<button class="btn ghost sm ${T.tab===k&&!T.edit?"on":""}" onclick="go('${k}')">${l}</button>`;
+  return `<header class="top"><div class="brand">📊 Teacher · ${esc(T.d.settings.title)}</div><div class="who">
+  ${tab("analytics","Analytics")}${tab("papers","Papers")}${tab("students","Students")}${tab("settings","Settings")}
+  <button class="btn ghost sm" onclick="load()">↻</button><button class="btn ghost sm" onclick="logout()">Log out</button></div></header>`;
+}
+let lastLoad=0;
+function go(t){T.tab=t;T.edit=null;if(t!=="analytics")T.an.stu=null;render();window.scrollTo(0,0);if(Date.now()-lastLoad>5000)load();}
+function logout(){ls.del(KEY);T.key="";T.d=null;render();}
+function render(keepModal){
+  if(!keepModal)closeModal();let h;
+  if(!window.API_URL)h=`<div class="wrap narrow"><div class="card"><h2>Not connected yet</h2><p class="muted">Add your Google Apps Script web app URL to <b>config.js</b>.</p></div></div>`;
+  else if(!T.d)h=viewLogin();
+  else if(T.edit)h=header()+viewEditor();
+  else h=header()+({analytics:viewAnalytics,papers:viewPapers,students:viewStudents,settings:viewSettings}[T.tab])();
+  document.getElementById("app").innerHTML=h;
+}
+function viewLogin(){
+  return `<div class="wrap narrow"><div class="hero"><div class="logo">📊</div><h1>Teacher page</h1></div>
+  <div class="card"><label>Teacher key</label><input type="password" id="tkey" onkeydown="if(event.key==='Enter')login()">
+  <div class="err">${esc(T.err)}</div><button class="btn" onclick="login()">Open</button></div>
+  <div class="foot"><a href="./">Student page</a></div></div>`;
+}
+async function login(){const k=$("#tkey").value.trim();if(!k)return;T.key=k;ls.set(KEY,k);await load();}
+
+/* ================= ANALYTICS ================= */
+function filtered(extra){
+  const pm=PM(),sm=SM(),a=T.an;
+  let F=T.d.attempts.filter(x=>x.status==="submitted"&&pm[x.paperId]&&sm[x.sid]&&sm[x.sid].status!=="removed").sort((x,y)=>x.submitted-y.submitted);
+  if(a.paper!=="all")F=F.filter(x=>x.paperId===a.paper);
+  if(a.cls!=="all")F=F.filter(x=>sm[x.sid].cls===a.cls);
+  if(extra)F=F.filter(extra);
+  if(a.mode!=="all"){const pick={};F.forEach((x,i)=>{const k=x.sid+"#"+x.paperId;if(a.mode==="latest"||!(k in pick))pick[k]=i;});const keep=new Set(Object.values(pick));F=F.filter((_,i)=>keep.has(i));}
+  return F;
+}
+function eachQ(F,cb){const pm=PM();F.forEach(a=>{const p=pm[a.paperId];p.questions.forEach((q,k)=>cb(q,L.indexOf(a.answers[k]||"-"),a,p,k));});}
+function topicStats(F){const t={};eachQ(F,(q,v)=>{const s=t[q.topic]||(t[q.topic]={n:0,c:0});s.n++;if(v===q.ans)s.c++;});return t;}
+function weakest(ts){let w=null;Object.keys(ts).forEach(k=>{if(ts[k].n&&(!w||ts[k].c/ts[k].n<ts[w].c/ts[w].n))w=k;});return w;}
+function topicCard(F,title){
+  const ts=topicStats(F),keys=Object.keys(ts).sort((a,b)=>ts[a].c/ts[a].n-ts[b].c/ts[b].n);
+  if(!keys.length)return"";
+  return `<div class="card"><h2>${title||"Topic-wise accuracy"}</h2><p class="muted small" style="margin-top:-6px">Weakest first. Below 50% needs re-teaching; 50–79% needs revision.</p>
+  <div class="tw"><table><thead><tr><th>Topic</th><th>Answers</th><th>Correct</th><th style="width:30%"></th></tr></thead><tbody>
+  ${keys.map(k=>{const s=ts[k],p=pc(s.c,s.n);return `<tr><td>${esc(k)}</td><td>${s.n}</td><td><span class="pct ${pctClass(p)}">${p}%</span></td><td><div class="hb"><i class="${pctClass(p)}" style="width:${p}%"></i></div></td></tr>`;}).join("")}
+  </tbody></table></div></div>`;
+}
+function hardCard(F,title){
+  const QS={};
+  eachQ(F,(q,v,a,p,k)=>{const id=p.id+"#"+k,s=QS[id]||(QS[id]={q,p,k,n:0,c:0,pick:[0,0,0,0],skip:0});s.n++;if(v<0)s.skip++;else s.pick[v]++;if(v===q.ans)s.c++;});
+  const QL=Object.values(QS).filter(s=>s.c<s.n).sort((a,b)=>a.c/a.n-b.c/b.n||b.n-a.n);
+  const show=T.an.allQ?QL:QL.slice(0,10);
+  const one=T.an.paper!=="all";
+  const cards=show.map(s=>{const q=s.q,p=pc(s.c,s.n);let wj=-1;s.pick.forEach((v,j)=>{if(j!==q.ans&&v&&(wj<0||v>s.pick[wj]))wj=j;});
+    return `<div class="hq ${pctClass(p)}"><div class="qhead"><span class="qn">${one?"":esc(s.p.title)+" · "}Q${s.k+1}</span><span class="chip">${esc(q.topic)}</span>
+    <span class="pct ${pctClass(p)}">${p}% correct</span><span class="muted small">(${s.c} of ${s.n})</span></div>
+    <div class="qtext">${esc(q.q)}</div><div class="ans">Correct answer: <span class="ca">${L[q.ans]}. ${esc(q.opts[q.ans])}</span></div>
+    ${wj>=0?`<div class="ans">Most common wrong answer: <span class="ya">${L[wj]}. ${esc(q.opts[wj])}</span> <span class="muted">(${s.pick[wj]} of ${s.n})</span></div>`:""}
+    ${s.skip?`<div class="ans muted">Left unanswered: ${s.skip}</div>`:""}</div>`;}).join("");
+  return `<div class="card"><h2>${title||"Questions most often answered wrong"}</h2><p class="muted small" style="margin-top:-6px">Hardest first. The most common wrong answer usually points to the misconception to clear up.</p>
+  ${QL.length?cards+(QL.length>10?`<div style="text-align:center"><button class="btn ghost sm" onclick="T.an.allQ=!T.an.allQ;render()">${T.an.allQ?"Show top 10 only":`Show all ${QL.length} questions`}</button></div>`:""):'<p class="muted">No wrong answers here. 🎉</p>'}</div>`;
+}
+function setAn(k,v){T.an[k]=v;if(k!=="allQ")T.an.allQ=false;render();}
+function viewAnalytics(){
+  const a=T.an,pm=PM(),sm=SM(),papers=T.d.papers.filter(p=>p.status!=="draft"&&p.questions.length).sort((x,y)=>y.created-x.created);
+  if(a.paper!=="all"&&!pm[a.paper])a.paper="all";
+  const cls=classesSeen();
+  const filt=`<div class="filters">
+   <div><label>Paper</label><select onchange="setAn('paper',this.value)"><option value="all">All papers (${papers.length})</option>${papers.map(p=>`<option value="${p.id}" ${a.paper===p.id?"selected":""}>${esc(p.title)}</option>`).join("")}</select></div>
+   <div><label>Class</label><select onchange="setAn('cls',this.value)"><option value="all">All classes</option>${cls.map(c=>`<option ${a.cls===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div>
+   <div><label>Count</label><select onchange="setAn('mode',this.value)"><option value="first" ${a.mode==="first"?"selected":""}>First attempt of each paper</option><option value="latest" ${a.mode==="latest"?"selected":""}>Latest attempt</option><option value="all" ${a.mode==="all"?"selected":""}>All attempts (incl. practice retakes)</option></select></div></div>`;
+  if(a.stu)return viewStudentDetail(filt);
+  const F=filtered();
+  const roster=activeStudents().filter(s=>a.cls==="all"||s.cls===a.cls);
+  if(!T.d.attempts.some(x=>x.status==="submitted"))return `<div class="wrap"><h1>Analytics</h1>${filt}<div class="card empty"><div style="font-size:42px">📭</div><h2>No submissions yet</h2><div class="muted">Results appear here as soon as students submit papers.${papers.length?"":" Start by adding a paper in the <b>Papers</b> tab."}</div></div></div>`;
+  const got=F.reduce((s,x)=>s+x.score,0),tot=F.reduce((s,x)=>s+x.total,0),ts=topicStats(F),w=weakest(ts);
+  const stats=`<div class="stats"><div class="stat"><span class="muted">Students${a.cls==="all"?"":" in "+esc(a.cls)}</span><b>${roster.length}</b></div>
+   <div class="stat"><span class="muted">Submissions counted</span><b>${F.length}</b></div>
+   <div class="stat"><span class="muted">Average score</span><b>${tot?`<span class="pct ${pctClass(pc(got,tot))}">${pc(got,tot)}%</span>`:"—"}</b></div>
+   <div class="stat"><span class="muted">Weakest topic</span><b style="font-size:17px;line-height:1.3">${w?`${esc(w)} <span class="pct ${pctClass(pc(ts[w].c,ts[w].n))}">(${pc(ts[w].c,ts[w].n)}%)</span>`:"—"}</b></div></div>`;
+  let mid="";
+  if(a.paper!=="all"){
+    const p=pm[a.paper],subIds=new Set(F.map(x=>x.sid));
+    const inprog=new Set(T.d.attempts.filter(x=>x.paperId===p.id&&x.status==="started").map(x=>x.sid));
+    const missing=roster.filter(s=>!subIds.has(s.id));
+    const buckets=[[0,39,"Below 40%"],[40,59,"40–59%"],[60,79,"60–79%"],[80,100,"80% and above"]].map(([lo,hi,l])=>({l,n:F.filter(x=>{const v=pc(x.score,x.total);return v>=lo&&v<=hi;}).length,lo}));
+    const mx=Math.max(1,...buckets.map(b=>b.n));
+    mid=`<div class="card"><div class="row between"><h2 style="margin:0">${esc(p.title)}</h2><div class="row">${modeTag(p)}${STATE_TAG[pState(p)]}</div></div>
+    <p class="muted small">${p.questions.length} questions${p.closes?` · closes ${fmtD(p.closes)}`:""}</p>
+    <div class="stats" style="margin:8px 0"><div class="stat"><span class="muted">Submitted</span><b>${subIds.size} / ${roster.length}</b></div>
+    <div class="stat"><span class="muted">In progress</span><b>${[...inprog].filter(id=>!subIds.has(id)).length}</b></div>
+    <div class="stat"><span class="muted">Not attempted</span><b>${missing.length}</b></div></div>
+    <h3 style="font-size:16px;margin:12px 0 8px">Score distribution</h3>
+    <table>${buckets.map(b=>`<tr><td style="width:130px">${b.l}</td><td><div class="hb"><i class="${b.lo>=80?"ok":b.lo>=40?"warn":"bad"}" style="width:${b.n/mx*100}%"></i></div></td><td style="width:50px"><b>${b.n}</b></td></tr>`).join("")}</table>
+    ${missing.length?`<p style="margin-bottom:0"><button class="btn ghost sm" onclick="setAn('showMissing',${!a.showMissing})">${a.showMissing?"Hide":"Show"} students who haven't submitted (${missing.length})</button></p>
+    ${a.showMissing?`<div class="chips" style="margin-top:10px">${missing.map(s=>`<span class="chip">${esc(s.name)} · ${esc(s.cls)}-${esc(s.roll)}${inprog.has(s.id)?" (in progress)":""}</span>`).join("")}</div>`:""}`:""}</div>`;
+  }else{
+    const rows=papers.map(p=>{const l=F.filter(x=>x.paperId===p.id),sc=l.map(x=>x.score),n=new Set(l.map(x=>x.sid)).size,av=l.length?sc.reduce((s,v)=>s+v,0)/l.length:0;
+      return `<tr class="click" onclick="setAn('paper','${p.id}')"><td><b>${esc(p.title)}</b><div class="row" style="gap:4px;margin-top:2px">${modeTag(p)}${STATE_TAG[pState(p)]}</div></td><td>${n} / ${roster.length}</td>
+      <td>${l.length?`<span class="pct ${pctClass(pc(av,p.questions.length))}">${av.toFixed(1)} / ${p.questions.length}</span>`:'<span class="muted">—</span>'}</td><td>${l.length?Math.max(...sc):"—"}</td><td>${l.length?Math.min(...sc):"—"}</td></tr>`;}).join("");
+    mid=`<div class="card"><h2>Papers</h2><p class="muted small" style="margin-top:-6px">Click a paper for its full analysis.</p><div class="tw"><table><thead><tr><th>Paper</th><th>Submitted</th><th>Average</th><th>High</th><th>Low</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  }
+  // students table
+  const srows=roster.map(s=>{const l=F.filter(x=>x.sid===s.id);const g=l.reduce((t,x)=>t+x.score,0),n=l.reduce((t,x)=>t+x.total,0),wt=weakest(topicStats(l));
+    return {s,l,v:n?pc(g,n):-1,html:`<tr class="click" onclick="T.an.stu='${s.id}';render();window.scrollTo(0,0)"><td><b>${esc(s.name)}</b></td><td>${esc(s.cls)}-${esc(s.roll)}</td><td>${new Set(l.map(x=>x.paperId)).size}</td>
+    <td>${n?`<span class="pct ${pctClass(pc(g,n))}">${pc(g,n)}%</span>`:'<span class="muted">—</span>'}</td><td>${wt?esc(wt):"—"}</td><td class="small">${l.length?fmtD(Math.max(...l.map(x=>x.submitted))):'<span class="muted">—</span>'}</td></tr>`};})
+    .sort((x,y)=>x.v-y.v);
+  const stab=`<div class="card"><h2>Students</h2><p class="muted small" style="margin-top:-6px">Lowest average first. Click a student for their own analysis.</p><div class="tw"><table><thead><tr><th>Name</th><th>Class-Roll</th><th>Papers</th><th>Average</th><th>Weakest topic</th><th>Last submitted</th></tr></thead><tbody>${srows.map(r=>r.html).join("")}</tbody></table></div></div>`;
+  return `<div class="wrap"><h1>Analytics</h1>${filt}${stats}${mid}${F.length?topicCard(F)+hardCard(F):'<div class="card muted">No submissions match these filters.</div>'}${stab}</div>`;
+}
+function viewStudentDetail(filt){
+  const s=SM()[T.an.stu],pm=PM();
+  const F=filtered(x=>x.sid===s.id);
+  const all=T.d.attempts.filter(x=>x.sid===s.id&&pm[x.paperId]&&x.status!=="void").sort((x,y)=>(y.submitted||y.started)-(x.submitted||x.started));
+  const got=F.reduce((t,x)=>t+x.score,0),tot=F.reduce((t,x)=>t+x.total,0);
+  const rows=all.map(x=>{const p=pm[x.paperId];return `<tr><td>${esc(p.title)} ${modeTag(p)}</td><td class="small">${x.status==="submitted"?fmtD(x.submitted):"started "+fmtD(x.started)}</td>
+    <td>${x.status==="submitted"?`<span class="pct ${pctClass(pc(x.score,x.total))}">${x.score} / ${x.total}</span>${x.late?' <span class="tag bad">late</span>':""}`:'<span class="tag warn">In progress</span>'}</td>
+    <td>${p.mode==="test"?`<button class="btn ghost sm" onclick="voidAttempt('${x.id}')">Allow retake</button>`:""}</td></tr>`;}).join("");
+  return `<div class="wrap"><div class="row between"><div><h1>${esc(s.name)}</h1><div class="muted">Class ${esc(s.cls)} · Roll no. ${esc(s.roll)} · registered ${fmtDay(s.registered)}</div></div>
+  <button class="btn ghost sm" onclick="T.an.stu=null;render()">← All students</button></div>${filt}
+  <div class="stats"><div class="stat"><span class="muted">Papers submitted</span><b>${new Set(F.map(x=>x.paperId)).size}</b></div>
+  <div class="stat"><span class="muted">Average score</span><b>${tot?`<span class="pct ${pctClass(pc(got,tot))}">${pc(got,tot)}%</span>`:"—"}</b></div></div>
+  ${F.length?topicCard(F,"Topic-wise accuracy")+hardCard(F,"Questions this student got wrong"):""}
+  <div class="card"><h2>All attempts</h2>${rows?`<div class="tw"><table><thead><tr><th>Paper</th><th>When</th><th>Score</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<p class="muted">No attempts yet.</p>'}
+  <p class="muted small">"Allow retake" cancels that test attempt so the student can take the test again. The cancelled attempt is no longer counted.</p></div></div>`;
+}
+function voidAttempt(id){ask("Cancel this attempt so the student can retake the test? Their current score for it will no longer count. If the test is already closed, reopen it from the Papers tab as well.","Allow retake",async()=>{try{await api("tVoidAttempt",{key:T.key,attemptId:id});await load();}catch(e){notify(e.message);}},true);}
+
+/* ================= PAPERS ================= */
+function viewPapers(){
+  const P=T.d.papers.slice().sort((a,b)=>b.created-a.created),n=activeStudents().length;
+  const cards=P.map(p=>{const st=pState(p),subs=T.d.attempts.filter(x=>x.paperId===p.id&&x.status==="submitted"),stu=new Set(subs.map(x=>x.sid)).size;
+    let sched=[];if(p.opens)sched.push("opens "+fmtD(p.opens));if(p.closes)sched.push("closes "+fmtD(p.closes));
+    const act=[];
+    act.push(`<button class="btn ghost sm" onclick="editPaper('${p.id}')">Edit</button>`);
+    if(p.status==="draft")act.push(`<button class="btn sm" onclick="setStatus('${p.id}','open')">Publish</button>`);
+    else if(st==="open"||st==="upcoming")act.push(`<button class="btn ghost sm" onclick="setStatus('${p.id}','closed')">Close now</button>`);
+    else act.push(`<button class="btn ghost sm" onclick="reopen('${p.id}')">Reopen</button>`);
+    if(subs.length)act.push(`<button class="btn ghost sm" onclick="T.an.paper='${p.id}';T.an.stu=null;go('analytics')">Analytics</button>`);
+    else act.push(`<button class="btn danger sm" onclick="delPaper('${p.id}')">Delete</button>`);
+    return `<div class="pcard"><div class="pc-top"><h3>${esc(p.title)}</h3><div class="row" style="gap:4px">${modeTag(p)}${STATE_TAG[st]}</div></div>
+    <div class="pc-meta">${p.questions.length} questions · ${[...new Set(p.questions.map(q=>q.topic))].length} topic(s)${p.mode==="test"?` · answers shown ${p.reveal==="submit"?"after submitting":p.reveal==="close"?"after closing":"never"}`:""}</div>
+    ${sched.length?`<div class="pc-meta">${sched.join(" · ")}</div>`:""}
+    <div class="pc-meta">Submitted by <b>${stu}</b> of ${n} students</div><div class="pc-btns">${act.join("")}</div></div>`;}).join("");
+  const starter=!P.length?`<div class="card"><h2>Start with your existing papers?</h2><p class="muted">Add the original 10 Std 8 Science practice papers (200 questions, chapters 1–9) as open practice papers.</p>
+    <button class="btn" onclick="importStarter()">Add the 10 practice papers</button></div>`:"";
+  return `<div class="wrap"><div class="row between"><h1>Papers</h1><button class="btn" onclick="editPaper(null)">+ New paper</button></div>
+  <p class="muted">Students only see papers that are <b>Open</b> or <b>Scheduled</b>. Drafts are hidden.</p>${starter}
+  ${P.length?`<div class="grid">${cards}</div>`:""}</div>`;
+}
+async function savePaper(p,qs){const r=await api("tSavePaper",{key:T.key,paper:p,questions:qs||undefined});return r.id;}
+function paperPayload(p,ch){return Object.assign({id:p.id,title:p.title,mode:p.mode,limit:p.limit,opens:p.opens,closes:p.closes,reveal:p.reveal,status:p.status},ch);}
+async function setStatus(id,status){const p=PM()[id];try{await savePaper(paperPayload(p,{status}));await load();}catch(e){notify(e.message);}}
+function reopen(id){const p=PM()[id];
+  if(p.closes&&p.closes<now()){ask("This paper's closing date has passed. Reopen it and remove the closing date?","Reopen",async()=>{try{await savePaper(paperPayload(p,{status:"open",closes:0}));await load();}catch(e){notify(e.message);}});}
+  else setStatus(id,"open");}
+function delPaper(id){ask(`Delete "${PM()[id].title}" and its questions? This can't be undone.`,"Delete",async()=>{try{await api("tDeletePaper",{key:T.key,id});await load();}catch(e){notify(e.message);}},true);}
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=()=>rej(new Error("Couldn't load "+src));document.head.appendChild(s);});}
+async function importStarter(){
+  try{
+    if(!window.STARTER_PAPERS)await loadScript("starter-papers.js");
+    const list=window.STARTER_PAPERS;let i=0;
+    for(const p of list){i++;modal(`<h2>Adding papers…</h2><p>${i} of ${list.length}</p>`);
+      await api("tSavePaper",{key:T.key,paper:{title:p.title,mode:"practice",status:"open",reveal:"submit"},questions:p.questions.map(toQ)},true);}
+    closeModal();await load();notify(`Added ${list.length} practice papers. They're open for students now.`);
+  }catch(e){closeModal();notify(e.message);load();}
+}
+
+/* ---------- paper editor ---------- */
+function toQ(x){ // {topic,q,correct,wrong:[3],exp} -> shuffled {topic,q,opts,ans,exp}
+  const raw=[x.correct,...x.wrong],ord=[0,1,2,3];let h=hashStr(x.q+"|"+x.correct);
+  for(let i=3;i>0;i--){h=Math.imul(h^(h>>>15),2246822519)>>>0;const j=h%(i+1);[ord[i],ord[j]]=[ord[j],ord[i]];}
+  return {topic:x.topic||"General",q:x.q,opts:ord.map(k=>raw[k]),ans:ord.indexOf(0),exp:x.exp||""};
+}
+const toLocal=ms=>{if(!ms)return"";const d=new Date(ms-new Date(ms).getTimezoneOffset()*60000);return d.toISOString().slice(0,16);};
+function editPaper(id){
+  const p=id?PM()[id]:null;
+  const used=p&&T.d.attempts.some(x=>x.paperId===p.id&&x.status!=="void");
+  T.edit=p?{id:p.id,title:p.title,mode:p.mode,limit:p.limit||30,opens:p.opens,closes:p.closes,reveal:p.reveal,status:p.status,questions:p.questions,changed:false,locked:used,errors:[],showAll:false}
+    :{id:null,title:"",mode:"practice",limit:30,opens:0,closes:0,reveal:"submit",status:"draft",questions:[],changed:false,locked:false,errors:[],showAll:false};
+  render();window.scrollTo(0,0);
+}
+function ed(k,v){T.edit[k]=v;render();}
+function readForm(){const e=T.edit,v=id=>{const el=$(id);return el?el.value:"";};
+  e.title=v("#eTitle").trim();e.mode=v("#eMode");if($("#eLimit"))e.limit=Number(v("#eLimit"))||0;if($("#eReveal"))e.reveal=v("#eReveal");
+  e.opens=v("#eOpens")?new Date(v("#eOpens")).getTime():0;e.closes=v("#eCloses")?new Date(v("#eCloses")).getTime():0;e.status=v("#eStatus");}
+function viewEditor(){
+  const e=T.edit,qs=e.questions,topics=[...new Set(qs.map(q=>q.topic))];
+  const show=e.showAll?qs:qs.slice(0,8);
+  const qsec=e.locked?`<div class="note">Students have already attempted this paper, so its questions are locked. To fix a small typo, edit the <b>Questions</b> tab of your Google Sheet directly. You can still change the settings above.</div>`
+   :`<p class="muted small" style="margin-top:-4px">Use the template: one row per question with <b>Topic, Question, Correct answer, Wrong answer 1, Wrong answer 2, Wrong answer 3, Explanation</b>. Options are shuffled automatically.</p>
+    <div class="row" style="margin-bottom:12px"><button class="btn ghost sm" onclick="downloadTemplate()">⬇ Download Excel template</button>
+    <label class="btn sm" style="font-weight:600;display:inline-block">⬆ Upload Excel / CSV<input type="file" accept=".xlsx,.xls,.csv,.ods" style="display:none" onchange="readFile(this.files[0]);this.value=''"></label></div>
+    <details><summary class="small" style="cursor:pointer;font-weight:600">…or paste rows copied from Excel / Google Sheets</summary>
+    <textarea id="paste" placeholder="Topic	Question	Correct answer	Wrong answer 1	Wrong answer 2	Wrong answer 3	Explanation"></textarea>
+    <button class="btn ghost sm" onclick="readPaste()">Read pasted rows</button></details>`;
+  const errs=e.errors.length?`<div class="note"><b>${e.errors.length} problem${e.errors.length>1?"s":""} found – fix them in your file and upload again:</b><ul style="margin:6px 0 0;padding-left:20px">${e.errors.slice(0,15).map(x=>`<li>${esc(x)}</li>`).join("")}${e.errors.length>15?`<li>…and ${e.errors.length-15} more</li>`:""}</ul></div>`:"";
+  const prev=qs.length?`<div class="row between" style="margin:14px 0 8px"><b>${qs.length} questions · ${topics.length} topic(s)${e.changed?' <span class="tag ok">new upload</span>':""}</b><span class="chips">${topics.map(t=>`<span class="chip">${esc(t)}</span>`).join("")}</span></div>
+    <div class="tw"><table><thead><tr><th>#</th><th>Question</th><th>Correct answer</th><th>Topic</th></tr></thead><tbody>
+    ${show.map((q,k)=>`<tr><td>${k+1}</td><td>${esc(q.q)}</td><td class="ca">${L[q.ans]}. ${esc(q.opts[q.ans])}</td><td class="small">${esc(q.topic)}</td></tr>`).join("")}</tbody></table></div>
+    ${qs.length>8?`<button class="btn ghost sm" style="margin-top:8px" onclick="readForm();ed('showAll',${!e.showAll})">${e.showAll?"Show fewer":`Show all ${qs.length}`}</button>`:""}`:`<p class="muted">No questions yet.</p>`;
+  const test=e.mode==="test";
+  return `<div class="wrap"><div class="row between"><h1>${e.id?"Edit paper":"New paper"}</h1><button class="btn ghost sm" onclick="T.edit=null;render()">Cancel</button></div>
+  <div class="card"><h2>Settings</h2>
+  <label>Title</label><input type="text" id="eTitle" maxlength="100" value="${esc(e.title)}" placeholder="e.g. Unit Test 1 – Force and Pressure">
+  <div class="grid2"><div><label>Type</label><select id="eMode" onchange="readForm();render()"><option value="practice" ${!test?"selected":""}>Practice – instant answers, unlimited retakes</option><option value="test" ${test?"selected":""}>Test – one attempt, no answers during the test</option></select></div>
+  ${test?`<div><label>Time limit (minutes, 0 = no limit)</label><input type="number" id="eLimit" min="0" max="600" value="${e.limit}"></div>`:"<div></div>"}</div>
+  ${test?`<label>Show correct answers to students</label><select id="eReveal"><option value="submit" ${e.reveal==="submit"?"selected":""}>Right after they submit</option><option value="close" ${e.reveal==="close"?"selected":""}>After the test closes</option><option value="never" ${e.reveal==="never"?"selected":""}>Never (score only)</option></select>`:""}
+  <div class="grid2"><div><label>Opens <span class="muted small">(optional)</span></label><input type="datetime-local" id="eOpens" value="${toLocal(e.opens)}"></div>
+  <div><label>Closes <span class="muted small">(optional)</span></label><input type="datetime-local" id="eCloses" value="${toLocal(e.closes)}"></div></div>
+  <label>Status</label><select id="eStatus"><option value="draft" ${e.status==="draft"?"selected":""}>Draft – hidden from students</option><option value="open" ${e.status==="open"?"selected":""}>Published – students can see it (from the opening time, if set)</option><option value="closed" ${e.status==="closed"?"selected":""}>Closed</option></select>
+  </div>
+  <div class="card"><h2>Questions</h2>${qsec}${errs}${prev}</div>
+  <div class="row"><button class="btn" onclick="saveEditor()">Save paper</button><button class="btn ghost" onclick="T.edit=null;render()">Cancel</button></div></div>`;
+}
+async function saveEditor(){
+  readForm();const e=T.edit;
+  if(!e.title)return notify("Please give the paper a title.");
+  if(!e.questions.length)return notify("Please upload the questions first.");
+  if(e.opens&&e.closes&&e.closes<=e.opens)return notify("The closing time must be after the opening time.");
+  try{await savePaper(paperPayload(e),e.changed?e.questions:null);T.edit=null;T.tab="papers";await load();}
+  catch(x){notify(x.message);}
+}
+async function xlsx(){if(!window.XLSX)await loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");return window.XLSX;}
+async function downloadTemplate(){
+  try{const X=await xlsx();
+    const ws=X.utils.aoa_to_sheet([["Topic","Question","Correct answer","Wrong answer 1","Wrong answer 2","Wrong answer 3","Explanation"],
+      ["Force and Pressure","The SI unit of pressure is ____.","Pascal","Newton","Joule","Watt","Pressure = force / area, and its SI unit is the pascal (Pa) = 1 N/m²."],
+      ["Inside the Atom","The charge on an electron is ____.","Negative","Positive","Neutral","Variable","Electrons carry a negative charge; protons are positive and neutrons are neutral."]]);
+    ws["!cols"]=[{wch:22},{wch:50},{wch:22},{wch:18},{wch:18},{wch:18},{wch:50}];
+    const wb=X.utils.book_new();X.utils.book_append_sheet(wb,ws,"Questions");X.writeFile(wb,"question-paper-template.xlsx");
+  }catch(e){notify(e.message);}
+}
+async function readFile(f){
+  if(!f)return;readForm();
+  try{const X=await xlsx();const wb=X.read(await f.arrayBuffer(),{type:"array"});const ws=wb.Sheets[wb.SheetNames[0]];
+    parseRows(X.utils.sheet_to_json(ws,{header:1,defval:"",raw:false}));
+    if(!T.edit.title)T.edit.title=f.name.replace(/\.[^.]+$/,"").replace(/[_-]+/g," ");render();}
+  catch(e){notify("Couldn't read that file: "+e.message);}
+}
+function readPaste(){readForm();const t=$("#paste").value;parseRows(t.split(/\r?\n/).map(l=>l.split("\t")));render();}
+function parseRows(rows){
+  rows=rows.map(r=>r.map(c=>String(c==null?"":c).trim())).filter(r=>r.some(Boolean));
+  const errors=[],out=[];
+  if(!rows.length){T.edit.errors=["The file is empty."];return;}
+  let map={topic:0,q:1,correct:2,wrong:[3,4,5],exp:6},optMode=false,start=0;
+  const h=rows[0].map(c=>c.toLowerCase());
+  if(h.some(c=>/^(q\.?|question)(\s*(text|no\.?))?$/.test(c))&&h.some(c=>/correct|answer|option|wrong/.test(c))){
+    start=1;const f=t=>h.findIndex(c=>t.test(c));
+    const optA=f(/^option\s*a$|^a$/),ansCol=f(/^answer$|^correct option$|^key$/);
+    if(optA>=0&&ansCol>=0){optMode=true;map={topic:f(/topic|chapter|lesson/),q:f(/question/),opts:[optA,f(/^option\s*b$|^b$/),f(/^option\s*c$|^c$/),f(/^option\s*d$|^d$/)],ans:ansCol,exp:f(/explan|reason|solution/)};}
+    else{const w=h.map((c,i)=>/wrong|incorrect|distract/.test(c)?i:-1).filter(i=>i>=0);
+      map={topic:f(/topic|chapter|lesson/),q:f(/question/),correct:f(/correct|right/),wrong:w,exp:f(/explan|reason|solution/)};}
+  }
+  const g=(r,i)=>i>=0&&i<r.length?r[i]:"";
+  rows.slice(start).forEach((r,ix)=>{
+    const line=ix+start+1,q=g(r,map.q),topic=g(r,map.topic)||"General",exp=g(r,map.exp);
+    if(!q){errors.push(`Row ${line}: question is empty.`);return;}
+    let opts,ans;
+    if(optMode){opts=map.opts.map(i=>g(r,i));const a=g(r,map.ans).toUpperCase().replace(/[^A-D1-4]/g,"");ans=a?("ABCD".indexOf(a[0])>=0?"ABCD".indexOf(a[0]):Number(a[0])-1):-1;
+      if(opts.some(o=>!o))return errors.push(`Row ${line}: all four options A–D are needed.`);
+      if(!(ans>=0&&ans<=3))return errors.push(`Row ${line}: the answer must be A, B, C or D.`);
+      if(new Set(opts.map(o=>o.toLowerCase())).size<4)return errors.push(`Row ${line}: two options are the same.`);
+      out.push({topic,q,opts,ans,exp});}
+    else{const c=g(r,map.correct),w=map.wrong.map(i=>g(r,i)).filter(Boolean);
+      if(!c)return errors.push(`Row ${line}: correct answer is empty.`);
+      if(w.length!==3)return errors.push(`Row ${line}: needs exactly 3 wrong answers (found ${w.length}).`);
+      if(new Set([c,...w].map(o=>o.toLowerCase())).size<4)return errors.push(`Row ${line}: two options are the same.`);
+      out.push(toQ({topic,q,correct:c,wrong:w,exp}));}
+  });
+  if(out.length>150)errors.push("A paper can have at most 150 questions.");
+  T.edit.errors=errors;
+  if(!errors.length){T.edit.questions=out;T.edit.changed=true;T.edit.showAll=false;}
+}
+
+/* ================= STUDENTS ================= */
+function viewStudents(){
+  const st=T.st,pm=PM(),cls=classesSeen();
+  const subs=T.d.attempts.filter(x=>x.status==="submitted"&&pm[x.paperId]);
+  const list=activeStudents().filter(s=>(st.cls==="all"||s.cls===st.cls)&&(!st.q||(s.name+" "+s.roll).toLowerCase().includes(st.q.toLowerCase())))
+    .sort((a,b)=>a.cls.localeCompare(b.cls)||a.roll.localeCompare(b.roll,undefined,{numeric:true}));
+  const rows=list.map(s=>{const l=subs.filter(x=>x.sid===s.id),g=l.reduce((t,x)=>t+x.score,0),n=l.reduce((t,x)=>t+x.total,0);
+    return `<tr><td><a href="#" onclick="T.an.stu='${s.id}';go('analytics');T.an.stu='${s.id}';render();return false"><b>${esc(s.name)}</b></a></td><td>${esc(s.cls)}</td><td>${esc(s.roll)}</td><td>${new Set(l.map(x=>x.paperId)).size}</td>
+    <td>${n?`<span class="pct ${pctClass(pc(g,n))}">${pc(g,n)}%</span>`:'<span class="muted">—</span>'}</td><td class="small">${s.lastLogin?fmtD(s.lastLogin):"—"}</td>
+    <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn ghost sm" onclick="resetPin('${s.id}')">Reset PIN</button><button class="btn danger sm" onclick="removeStu('${s.id}')">Remove</button></div></td></tr>`;}).join("");
+  return `<div class="wrap"><h1>Students</h1><p class="muted">${activeStudents().length} registered. Students register themselves with the class code <b>${esc(T.d.settings.classCode)}</b> (see Settings).</p>
+  <div class="filters"><div><label>Class</label><select onchange="T.st.cls=this.value;render()"><option value="all">All classes</option>${cls.map(c=>`<option ${st.cls===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div>
+  <div><label>Search</label><input type="text" id="sq" value="${esc(st.q)}" placeholder="Name or roll no." oninput="T.st.q=this.value;clearTimeout(window._sq);window._sq=setTimeout(()=>{render();const i=$('#sq');i.focus();i.setSelectionRange(i.value.length,i.value.length);},300)" style="margin-bottom:0"></div></div>
+  <div class="card" style="margin-top:14px">${list.length?`<div class="tw"><table><thead><tr><th>Name</th><th>Class</th><th>Roll</th><th>Papers</th><th>Average</th><th>Last login</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<p class="muted">No students found.</p>'}</div></div>`;
+}
+function resetPin(id){const s=SM()[id];
+  modal(`<h2>Reset PIN for ${esc(s.name)}</h2><p class="muted small">Class ${esc(s.cls)}, roll no. ${esc(s.roll)}. Tell the student their new PIN. They'll be logged out on other devices.</p>
+  <input type="text" id="np" maxlength="4" inputmode="numeric" placeholder="New 4-digit PIN" style="text-align:center;font-size:20px"><div class="err" id="npErr"></div>
+  <div class="row"><button class="btn" onclick="doResetPin('${id}')">Set PIN</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
+  setTimeout(()=>$("#np").focus(),0);}
+async function doResetPin(id){const pin=$("#np").value.trim();if(!/^\d{4}$/.test(pin)){$("#npErr").textContent="PIN must be exactly 4 digits.";return;}
+  try{await api("tResetPin",{key:T.key,studentId:id,pin});closeModal();notify("PIN changed to "+pin+".");}catch(e){$("#npErr").textContent=e.message;}}
+function removeStu(id){const s=SM()[id];ask(`Remove ${s.name} (${s.cls}-${s.roll})? They won't be able to log in, and their results are hidden from analytics. Their roll no. becomes free to register again.`,"Remove",async()=>{try{await api("tSetStudent",{key:T.key,studentId:id,status:"removed"});await load();}catch(e){notify(e.message);}},true);}
+
+/* ================= SETTINGS ================= */
+function viewSettings(){
+  const s=T.d.settings,link=location.href.replace(/teacher\.html.*$/,"");
+  const msg=`${s.title} tests: open ${link} → tap "New student" → class code ${s.classCode}. Use your class, roll no. and a 4-digit PIN you'll remember.`;
+  return `<div class="wrap narrow"><h1>Settings</h1>
+  <div class="card"><h2>Share with students</h2><label>Student link</label><div class="copy">${esc(link)}</div>
+  <label style="margin-top:12px">Message you can send</label><div class="copy" id="shareMsg">${esc(msg)}</div>
+  <button class="btn ghost sm" style="margin-top:10px" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('shareMsg').textContent).then(()=>this.textContent='Copied ✓')">Copy message</button></div>
+  <div class="card"><h2>Class settings</h2>
+  <label>Title shown to students</label><input type="text" id="sTitle" maxlength="60" value="${esc(s.title)}">
+  <label>Class code <span class="muted small">(students need it to register; change it to stop new sign-ups)</span></label><input type="text" id="sCode" maxlength="20" value="${esc(s.classCode)}">
+  <label>Classes <span class="muted small">(comma-separated, e.g. 8A, 8B, 8C – students pick from this list. Leave empty to let them type it.)</span></label><input type="text" id="sCls" value="${esc(s.classes.join(", "))}">
+  <div class="err" id="sErr"></div><button class="btn" onclick="saveSettings()">Save settings</button></div></div>`;
+}
+async function saveSettings(){
+  try{const r=await api("tSettings",{key:T.key,title:$("#sTitle").value,classCode:$("#sCode").value,classes:$("#sCls").value});T.d.settings=r.settings;render();notify("Settings saved.");}
+  catch(e){$("#sErr").textContent=e.message;}
+}
+
+if(T.key&&window.API_URL)load();else render();
+</script>
+</body>
+</html>
