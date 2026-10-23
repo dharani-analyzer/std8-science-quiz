@@ -17,6 +17,9 @@ const S={token:ls.get(TOKEN,null),student:null,title:"Std 8 Science",papers:[],i
   paper:null,qs:[],att:null,deadline:0,timer:null,result:null,onlyWrong:false,err:""};
 
 /* ---------- local progress (survives refresh / closing the tab) ---------- */
+const fmtN=x=>{x=Math.round(x*100)/100;return x<0?"−"+(-x):String(x);};
+const negOf=p=>Number(p&&p.neg)||0;
+const markTag=p=>negOf(p)?`+1 / −${negOf(p)}`:"1 mark";
 const progKey=pid=>"q8_prog_"+(S.student?S.student.id:"")+"_"+pid;
 function prog(){return ls.get(progKey(S.paper.id),null);}
 function saveProg(p){ls.set(progKey(S.paper.id),p);}
@@ -83,11 +86,11 @@ function paperCard(p){
   let status="",btns="";
   const local=ls.get(progKey(p.id),null);
   if(p.mode==="practice"){
-    status=st.subs.length?`Best <b>${st.best}/${p.count}</b> · ${st.subs.length} attempt${st.subs.length>1?"s":""}`:"Not attempted yet";
+    status=st.subs.length?`Best <b>${fmtN(st.best)}/${p.count}</b> · ${st.subs.length} attempt${st.subs.length>1?"s":""}`:"Not attempted yet";
     if(p.state==="open")btns+=`<button class="btn sm" onclick="openPaper('${p.id}')">${local&&Object.keys(local.answers||{}).length?"Continue":st.subs.length?"Practise again":"Start"}</button>`;
     if(st.last)btns+=`<button class="btn ghost sm" onclick="openReview('${st.last.id}')">Review last attempt</button>`;
   }else{
-    if(st.subs.length){status=`Submitted · Score <b>${st.last.score}/${st.last.total}</b>${st.last.late?' <span class="tag bad">late</span>':""}`;
+    if(st.subs.length){status=`Submitted · Score <b>${fmtN(st.last.score)}/${st.last.total}</b>${st.last.late?' <span class="tag bad">late</span>':""}`;
       btns+=p.canReveal?`<button class="btn ghost sm" onclick="openReview('${st.last.id}')">Review answers</button>`
         :`<span class="muted small">${p.reveal==="never"?"Answers will not be shown for this test.":"Answers will be shown after the test closes."}</span>`;}
     else if(st.started){status=`<span class="tag warn">In progress</span>`;btns+=`<button class="btn sm" onclick="openPaper('${p.id}')">Continue test</button>`;}
@@ -96,7 +99,7 @@ function paperCard(p){
   }
   return `<div class="pcard"><div class="pc-top"><h3>${esc(p.title)}</h3>${badge}</div>
   <div class="chips">${topics}</div>
-  <div class="pc-meta">${p.count} questions${when?" · "+when:""}</div>
+  <div class="pc-meta">${p.count} questions · ${negOf(p)?`+1 correct, −${negOf(p)} wrong`:"no negative marks"}${when?" · "+when:""}</div>
   <div class="pc-meta">${status}</div><div class="pc-btns">${btns}</div></div>`;
 }
 function viewHome(){
@@ -120,31 +123,33 @@ function qCard(k){
   const q=S.qs[k],pr=prog()||{answers:{}},v=pr.answers[k];
   if(S.paper.mode==="test"){
     const opts=q.opts.map((o,j)=>`<button class="opt ${v===j?"sel":""}" onclick="pick(${k},${j})"><span class="ol">${L[j]}</span><span>${esc(o)}</span></button>`).join("");
-    return `<div class="qcard ${v!==undefined?"is-sel":""}" id="q-${k}"><div class="qhead"><span class="qn">Q${k+1}</span><span class="chip">${esc(q.topic)}</span><span class="muted small">1 mark</span></div>
+    return `<div class="qcard ${v!==undefined?"is-sel":""}" id="q-${k}"><div class="qhead"><span class="qn">Q${k+1}</span><span class="chip">${esc(q.topic)}</span><span class="muted small">${markTag(S.paper)}</span>
+    ${v!==undefined?`<button class="btn ghost sm" style="margin-left:auto" onclick="unpick(${k})">Clear answer</button>`:""}</div>
     <div class="qtext">${esc(q.q)}</div><div class="opts">${opts}</div></div>`;
   }
   const done=v!==undefined;
   const opts=q.opts.map((o,j)=>{let c="opt";if(done)c+=j===q.ans?" right":j===v?" wrong":" dim";
     return `<button class="${c}" ${done?"disabled":""} onclick="pick(${k},${j})"><span class="ol">${L[j]}</span><span>${esc(o)}</span></button>`;}).join("");
   let fb="";
-  if(done){const ok=v===q.ans;fb=`<div class="fb ${ok?"ok":"bad"}"><b>${ok?"✓ Correct! +1 mark":"✗ Wrong · 0 marks"}</b>${ok?"":` — Correct answer: <b>${L[q.ans]}. ${esc(q.opts[q.ans])}</b>`}${q.exp?`<div class="exp">${esc(q.exp)}</div>`:""}</div>`;}
+  if(done){const ok=v===q.ans;fb=`<div class="fb ${ok?"ok":"bad"}"><b>${ok?"✓ Correct! +1 mark":`✗ Wrong · ${negOf(S.paper)?"−"+negOf(S.paper)+" mark"+(negOf(S.paper)===1?"":"s"):"0 marks"}`}</b>${ok?"":` — Correct answer: <b>${L[q.ans]}. ${esc(q.opts[q.ans])}</b>`}${q.exp?`<div class="exp">${esc(q.exp)}</div>`:""}</div>`;}
   return `<div class="qcard ${done?(v===q.ans?"is-ok":"is-bad"):""}" id="q-${k}"><div class="qhead"><span class="qn">Q${k+1}</span><span class="chip">${esc(q.topic)}</span><span class="muted small">1 mark</span></div>
   <div class="qtext">${esc(q.q)}</div><div class="opts">${opts}</div>${fb}</div>`;
 }
-function counts(){const a=(prog()||{answers:{}}).answers;let n=0,c=0;S.qs.forEach((q,k)=>{if(a[k]!==undefined){n++;if(a[k]===q.ans)c++;}});return{n,c};}
+function counts(){const a=(prog()||{answers:{}}).answers;let n=0,c=0;S.qs.forEach((q,k)=>{if(a[k]!==undefined){n++;if(a[k]===q.ans)c++;}});return{n,c,w:n-c,net:c-negOf(S.paper)*(n-c)};}
 function pbar(){
-  const {n,c}=counts(),N=S.qs.length;
+  const {n,c,w,net}=counts(),N=S.qs.length;
   if(S.paper.mode==="test")return `<div class="pbar-in"><div><b>${esc(S.paper.title)}</b> <span class="muted">· ${N} questions</span></div>
     <div class="pills">${S.deadline?`<span class="pill timer" id="timer">⏱ --:--</span>`:""}<span class="pill">Answered ${n}/${N}</span></div>
     <div class="row"><button class="btn sm" onclick="finish()">Submit test</button></div></div>`;
   return `<div class="pbar-in"><div><b>${esc(S.paper.title)}</b> <span class="muted">· ${N} questions</span></div>
-  <div class="pills"><span class="pill">Answered ${n}/${N}</span><span class="pill ok">Marks ${c}</span><span class="pill bad">Wrong ${n-c}</span></div>
+  <div class="pills"><span class="pill">Answered ${n}/${N}</span><span class="pill ok">Correct ${c}</span><span class="pill bad">Wrong ${w}</span><span class="pill">Marks ${fmtN(net)}</span></div>
   <div class="row"><button class="btn sm" onclick="finish()">Finish &amp; submit</button></div></div>`;
 }
 function viewPaper(){
-  const t=S.paper.mode==="test";
-  const intro=t?`<b>Test rules:</b> one attempt only. You can change an answer until you submit. Answers are not shown during the test.${S.deadline?` The test is <b>submitted automatically</b> when the timer ends.`:""}`
-    :`Click an option to answer. Each answer is checked instantly and can't be changed. When all ${S.qs.length} questions are answered, your score is submitted to your teacher automatically.`;
+  const t=S.paper.mode==="test",ng=negOf(S.paper);
+  const neg=ng?`<div style="margin-top:6px"><b>Marking:</b> +1 for a correct answer, <b>−${ng}</b> for a wrong answer, 0 if you skip. If you don't know an answer, it's better to skip it than to guess.</div>`:"";
+  const intro=(t?`<b>Test rules:</b> one attempt only. You can change or clear an answer until you submit. Answers are not shown during the test.${S.deadline?` The test is <b>submitted automatically</b> when the timer ends.`:""}`
+    :`Click an option to answer. Each answer is checked instantly and can't be changed. When all ${S.qs.length} questions are answered, your score is submitted to your teacher automatically. To skip questions, leave them and press <b>Finish &amp; submit</b>.`)+neg;
   return header()+`<div class="pbar" id="pbar">${pbar()}</div><div class="wrap"><div class="intro">${intro}</div>
   ${S.qs.map((_,k)=>qCard(k)).join("")}
   <div class="endbox"><button class="btn" onclick="finish()">${t?"Submit test":"Finish &amp; submit"}</button> <button class="btn ghost" onclick="goHome()">Back to my papers</button></div></div>`;
@@ -154,14 +159,14 @@ function viewReview(){
   const list=qs.map((q,k)=>({q,k,v:rv.answers[k]})).filter(x=>!S.onlyWrong||x.v!==x.q.ans);
   const wrong=qs.filter((q,k)=>rv.answers[k]!==q.ans).length;
   const items=list.map(({q,k,v})=>{const ok=v===q.ans;
-    return `<div class="qcard ${ok?"is-ok":"is-bad"}"><div class="qhead"><span class="qn">Q${k+1}</span><span class="chip">${esc(q.topic)}</span>${ok?'<span class="tag ok">Correct</span>':'<span class="tag bad">Wrong</span>'}</div>
+    return `<div class="qcard ${ok?"is-ok":"is-bad"}"><div class="qhead"><span class="qn">Q${k+1}</span><span class="chip">${esc(q.topic)}</span>${ok?'<span class="tag ok">Correct</span>':v>=0?'<span class="tag bad">Wrong</span>':'<span class="tag">Skipped</span>'}</div>
     <div class="qtext">${esc(q.q)}</div>
-    <div class="ans">Your answer: <span class="${ok?"ca":"ya"}">${v>=0?L[v]+". "+esc(q.opts[v]):"Not answered"}</span></div>
+    <div class="ans">Your answer: <span class="${ok?"ca":v>=0?"ya":"muted"}">${v>=0?L[v]+". "+esc(q.opts[v]):"Skipped"}</span></div>
     ${ok?"":`<div class="ans">Correct answer: <span class="ca">${L[q.ans]}. ${esc(q.opts[q.ans])}</span></div>`}
     ${q.exp?`<div class="fb ok" style="margin-top:8px"><div class="exp" style="margin:0">${esc(q.exp)}</div></div>`:""}</div>`;}).join("");
   return header()+`<div class="wrap"><div class="row between" style="margin-bottom:12px"><div><h1>${esc(r.paper.title)} – Review</h1>
-  <div class="muted">Score <b>${r.score}/${r.total}</b> · ${wrong} mistake${wrong===1?"":"s"}</div></div>
-  <div class="row"><label class="row small" style="font-weight:600"><input type="checkbox" ${S.onlyWrong?"checked":""} onchange="S.onlyWrong=this.checked;render()"> Show mistakes only</label>
+  <div class="muted">Score <b>${fmtN(r.score)}/${r.total}</b> · ${wrong} wrong or skipped</div></div>
+  <div class="row"><label class="row small" style="font-weight:600"><input type="checkbox" ${S.onlyWrong?"checked":""} onchange="S.onlyWrong=this.checked;render()"> Show wrong &amp; skipped only</label>
   <button class="btn ghost sm" onclick="goHome()">My papers</button></div></div>
   ${items||`<div class="card empty"><div style="font-size:42px">🎉</div><h2>No mistakes!</h2></div>`}</div>`;
 }
@@ -212,9 +217,10 @@ function pick(k,j){
   $("#pbar").innerHTML=pbar();tick();
   if(S.paper.mode==="practice"&&counts().n===S.qs.length)setTimeout(()=>submit(),700);
 }
+function unpick(k){const pr=prog();if(!pr||S.paper.mode!=="test")return;delete pr.answers[k];saveProg(pr);document.getElementById("q-"+k).outerHTML=qCard(k);$("#pbar").innerHTML=pbar();tick();}
 function finish(){
   const {n}=counts(),N=S.qs.length;
-  if(n<N)ask(`${N-n} question${N-n>1?"s are":" is"} not answered and will get 0 marks. Submit now?`,S.paper.mode==="test"?"Yes, submit test":"Yes, submit",submit);
+  if(n<N)ask(`You have skipped ${N-n} question${N-n>1?"s":""} (0 marks each). Submit now?`,S.paper.mode==="test"?"Yes, submit test":"Yes, submit",submit);
   else if(S.paper.mode==="test")ask("Submit your test now? You can't change answers after this.","Submit test",submit);
   else submit();
 }
@@ -241,9 +247,10 @@ function showResult(r){
   const p=pc(r.score,r.total);
   const msg=p>=90?"Outstanding! 🌟":p>=75?"Great work! 👏":p>=50?"Good effort – revise your mistakes 📘":"Keep practising – review your mistakes 💪";
   S.view="home";render();
-  modal(`<div class="muted">${esc(r.paper.title)} – submitted ✓</div><div class="big">${r.score} / ${r.total}</div>
-  <div style="font-size:18px;font-weight:700;margin:4px 0">${p}% · ${msg}</div>${r.late?'<div class="tag bad">Submitted after the time limit</div>':""}
-  <table><thead><tr><th>Topic</th><th>Marks</th></tr></thead><tbody>${topicRows(r)}</tbody></table>
+  const ng=negOf(r.paper),brk=r.correct!==undefined?`<div class="pills" style="justify-content:center;margin:8px 0"><span class="pill ok">✓ ${r.correct} correct${ng?` (+${r.correct})`:""}</span><span class="pill bad">✗ ${r.wrong} wrong${ng&&r.wrong?` (−${fmtN(r.wrong*ng)})`:""}</span><span class="pill">${r.skipped} skipped</span></div>`:"";
+  modal(`<div class="muted">${esc(r.paper.title)} – submitted ✓</div><div class="big">${fmtN(r.score)} / ${r.total}</div>${brk}
+  <div style="font-size:18px;font-weight:700;margin:4px 0">${fmtN(p)}% · ${msg}</div>${r.late?'<div class="tag bad">Submitted after the time limit</div>':""}
+  <table><thead><tr><th>Topic</th><th>Correct</th></tr></thead><tbody>${topicRows(r)}</tbody></table>
   ${r.review?"":`<p class="muted small">${r.hidden==="never"?"Answers are not shown for this test.":"Correct answers will be shown after the test closes."}</p>`}
   <div class="row">${r.review?`<button class="btn" onclick="S.onlyWrong=true;S.view='review';render();window.scrollTo(0,0)">Review mistakes</button>`:""}
   <button class="btn ghost" onclick="closeModal();loadHome().catch(()=>{})">Back to my papers</button></div>`);
