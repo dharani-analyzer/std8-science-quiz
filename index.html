@@ -103,6 +103,22 @@ th{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.03
 .empty{text-align:center;padding:40px 10px}
 .small{font-size:14px}
 a.link{color:var(--bad);cursor:pointer;font-size:14px;text-decoration:underline}
+select{padding:8px 10px;border:1px solid #cfd6e4;border-radius:8px;font:inherit;background:#fff;color:var(--ink);max-width:100%}
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tw table{min-width:520px}
+.hb{height:10px;background:#e9edf4;border-radius:6px;overflow:hidden;min-width:80px}
+.hb i{display:block;height:100%;border-radius:6px}
+.hb i.ok{background:var(--ok)}.hb i.warn{background:#e0a100}.hb i.bad{background:var(--bad)}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--soft)}
+.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:6px 0 4px}
+.filters>div{display:flex;flex-direction:column;gap:4px}
+.hq{border:1px solid var(--line);border-left:5px solid var(--bad);border-radius:12px;padding:12px 16px;margin-bottom:10px;background:#fff}
+.hq.warn{border-left-color:#e0a100}.hq.ok{border-left-color:var(--ok)}
+.hq .qtext{font-size:16px;margin:4px 0 6px}
+.hq .ans{font-size:14px}
+.foot{text-align:center;margin-top:8px}
+.foot a{color:var(--muted);font-size:14px}
 </style>
 </head>
 <body>
@@ -381,6 +397,35 @@ function loadData(){D=store.get(dataKey(cur),{papers:{}});}
 function save(){store.set(dataKey(cur),D);}
 function P(i){return D.papers[i]||(D.papers[i]={answers:{},finished:false,attempts:[]});}
 
+/* ---------- sending results to the teacher ---------- */
+// Paste the Google Apps Script web app URL between the quotes.
+const RESULTS_URL="";
+const OUTBOX=APP+"_outbox";
+let flushing=false;
+function curUser(){return users().find(u=>u.name===cur)||{name:cur,roll:""};}
+function queueResult(i){
+  const p=P(i),u=curUser();
+  const pick=q=>q.id in p.answers?L[p.answers[q.id]]:"-";
+  const rec={id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),t:Date.now(),
+    name:u.name,roll:u.roll||"",paper:i+1,score:scoreOf(i).s,total:PER,
+    ans:PAPERS[i].map(pick).join(""),
+    q:PAPERS[i].map(q=>[q.id,q.ch,pick(q),p.answers[q.id]===q.ans?1:0])};
+  const box=store.get(OUTBOX,[]);box.push(rec);store.set(OUTBOX,box.slice(-200));
+  flush();
+}
+async function flush(){
+  if(!RESULTS_URL||flushing)return;
+  const box=store.get(OUTBOX,[]);if(!box.length)return;
+  flushing=true;
+  try{
+    await fetch(RESULTS_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({rows:box})});
+    const sent=new Set(box.map(r=>r.id));
+    store.set(OUTBOX,store.get(OUTBOX,[]).filter(r=>!sent.has(r.id)));
+  }catch(e){/* offline: will retry next time */}
+  flushing=false;
+}
+window.addEventListener("online",flush);
+
 /* ---------- helpers ---------- */
 const $=s=>document.querySelector(s);
 const L="ABCD";
@@ -412,6 +457,7 @@ function viewLogin(){
   }
   const create=us.length<MAX_USERS?`
     <label>Student name</label><input type="text" id="nName" maxlength="20" placeholder="e.g. Aarav">
+    <label>Class &amp; roll no.</label><input type="text" id="nRoll" maxlength="10" placeholder="e.g. 8A-12">
     <label>Choose a 4-digit PIN</label><input type="password" id="nPin" maxlength="4" inputmode="numeric">
     <label>Confirm PIN</label><input type="password" id="nPin2" maxlength="4" inputmode="numeric" onkeydown="if(event.key==='Enter')createUser()">
     <div class="err" id="newErr"></div>
@@ -426,6 +472,8 @@ function viewLogin(){
   <div class="card small"><h2>Backup</h2><p class="muted" style="margin-top:0">Progress is saved in this browser on this computer. Download a backup now and then, so it isn't lost if browser data is cleared.</p>
   <div class="row"><button class="btn ghost sm" onclick="exportData()">⬇ Download backup</button>
   <label class="btn ghost sm" style="font-weight:600">⬆ Restore backup<input type="file" accept=".json" style="display:none" onchange="importData(this.files[0])"></label></div></div>
+  <p class="muted small" style="text-align:center">Your name, class &amp; roll no. and test answers are shared with your teacher.</p>
+  <div class="foot"><a href="#teacher">Teacher dashboard</a></div>
   </div>`;
 }
 
@@ -524,7 +572,7 @@ function go(v,a){view=v;arg=a;render();window.scrollTo(0,0);}
 function render(){
   closeModal();
   let h;
-  if(!cur)h=viewLogin();else if(view==="paper")h=viewPaper(arg);else if(view==="recap")h=viewRecap(arg);else h=viewDash();
+  if(location.hash==="#teacher")h=viewTeacher();else if(!cur)h=viewLogin();else if(view==="paper")h=viewPaper(arg);else if(view==="recap")h=viewRecap(arg);else h=viewDash();
   document.getElementById("app").innerHTML=h;
 }
 function answer(i,k,j){
@@ -543,7 +591,7 @@ function finish(i,auto){
 function doFinish(i){
   const p=P(i);if(p.finished){showResult(i);return;}
   const {s}=scoreOf(i);
-  p.finished=true;p.attempts.push({score:s,date:Date.now()});save();
+  p.finished=true;p.attempts.push({score:s,date:Date.now()});save();queueResult(i);
   const y=window.scrollY;render();window.scrollTo(0,y);showResult(i);
 }
 function showResult(i){
@@ -594,15 +642,16 @@ function doLogin(){
   }else{$("#loginErr").textContent="Wrong PIN. Please try again.";$("#pin").value="";}
 }
 function createUser(){
-  const name=$("#nName").value.trim().replace(/\s+/g," ");const p1=$("#nPin").value.trim(),p2=$("#nPin2").value.trim();
+  const name=$("#nName").value.trim().replace(/\s+/g," ");const roll=$("#nRoll").value.trim().replace(/\s+/g," ");const p1=$("#nPin").value.trim(),p2=$("#nPin2").value.trim();
   const err=t=>{$("#newErr").textContent=t;};
   const us=users();
   if(!name)return err("Please enter a name.");
+  if(!roll)return err("Please enter your class & roll no.");
   if(us.length>=MAX_USERS)return err("Maximum 10 students reached.");
   if(us.some(u=>u.name.toLowerCase()===name.toLowerCase()))return err("A student with this name already exists.");
   if(!/^\d{4}$/.test(p1))return err("PIN must be exactly 4 digits.");
   if(p1!==p2)return err("The two PINs do not match.");
-  us.push({name,pin:pinHash(name,p1),created:Date.now()});
+  us.push({name,roll,pin:pinHash(name,p1),created:Date.now()});
   if(!store.set(USERS_KEY,us))return;
   cur=name;try{sessionStorage.setItem(APP+"_cur",cur);}catch(e){}
   loadData();save();go("dash");
@@ -635,10 +684,127 @@ function importData(f){
   r.readAsText(f);
 }
 
+/* ---------- teacher dashboard ---------- */
+const TKEY=APP+"_tkey";
+const T={key:null,rows:null,err:"",loading:false,stu:"all",mode:"first",allQ:false,list:[]};
+const POS={};PAPERS.forEach((qs,pi)=>qs.forEach((q,k)=>POS[q.id]=[pi,k]));
+function tKeyGet(){try{return localStorage.getItem(TKEY)||"";}catch(e){return "";}}
+function tKeySet(k){try{k?localStorage.setItem(TKEY,k):localStorage.removeItem(TKEY);}catch(e){}}
+async function tLoad(key){
+  T.loading=true;T.err="";render();
+  try{
+    const r=await fetch(RESULTS_URL+"?key="+encodeURIComponent(key));const j=await r.json();
+    if(j.ok){T.key=key;T.rows=j.rows||[];tKeySet(key);}
+    else{T.rows=null;tKeySet("");T.err=j.error==="bad key"?"Wrong teacher key.":"Could not load results.";}
+  }catch(e){T.err="Could not reach the results sheet. Check your internet connection.";}
+  T.loading=false;render();
+}
+function tLogin(){const k=$("#tkey").value.trim();if(k)tLoad(k);}
+function tLogout(){tKeySet("");T.key=null;T.rows=null;T.stu="all";render();}
+function tSet(k,v){T[k]=v;render();}
+function tPick(n){T.stu=T.list[n]?T.list[n].sk:"all";render();window.scrollTo(0,0);}
+const fmtT=t=>new Date(t).toLocaleString("en-IN",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"});
+const pc=(c,n)=>n?Math.round(c/n*100):0;
+function chapStats(atts){
+  const cs=CHAPTERS.map(()=>({n:0,c:0}));
+  atts.forEach(a=>PAPERS[a.paper-1].forEach((q,k)=>{cs[q.ch-1].n++;if(L.indexOf(a.ans[k])===q.ans)cs[q.ch-1].c++;}));
+  return cs;
+}
+function weakest(cs){let w=-1;cs.forEach((s,i)=>{if(s.n&&(w<0||s.c/s.n<cs[w].c/cs[w].n))w=i;});return w;}
+function viewTeacher(){
+  const top=`<header class="top"><div class="brand">📊 Teacher dashboard · Std 8 Science</div><div class="who">
+  ${T.rows?`<button class="btn ghost sm" onclick="tLoad(T.key)" ${T.loading?"disabled":""}>${T.loading?"Loading…":"↻ Refresh"}</button><button class="btn ghost sm" onclick="tLogout()">Log out</button>`:""}
+  <button class="btn ghost sm" onclick="location.hash=''">Student page</button></div></header>`;
+  if(!RESULTS_URL)return top+`<div class="wrap narrow"><div class="card"><h2>Results sheet not connected yet</h2><p class="muted">This page isn't linked to a Google Sheet, so no scores are being collected. Add the Apps Script web app URL to <b>RESULTS_URL</b> in index.html.</p></div></div>`;
+  if(!T.rows)return top+`<div class="wrap narrow"><div class="card"><h2>Teacher login</h2>
+  <label>Teacher key</label><input type="password" id="tkey" onkeydown="if(event.key==='Enter')tLogin()">
+  <div class="err">${esc(T.err)}</div><button class="btn" onclick="tLogin()" ${T.loading?"disabled":""}>${T.loading?"Loading…":"Open dashboard"}</button></div></div>`;
+
+  // all submissions, oldest first
+  const A=T.rows.map(r=>({id:r[0],t:Number(r[1]),name:String(r[2]),roll:String(r[3]),paper:Number(r[4]),score:Number(r[5]),total:Number(r[6])||PER,ans:String(r[7]||"")}))
+    .filter(a=>a.paper>=1&&a.paper<=NPAPERS).map(a=>(a.sk=(a.name.trim()+"|"+a.roll.trim()).toLowerCase(),a)).sort((a,b)=>a.t-b.t);
+  // student list
+  const SM={};A.forEach(a=>{(SM[a.sk]||(SM[a.sk]={sk:a.sk,name:a.name,roll:a.roll}));});
+  T.list=Object.values(SM).sort((a,b)=>a.name.localeCompare(b.name)||a.roll.localeCompare(b.roll,undefined,{numeric:true}));
+  if(T.stu!=="all"&&!SM[T.stu])T.stu="all";
+  // filters
+  let F=T.stu==="all"?A:A.filter(a=>a.sk===T.stu);
+  if(T.mode!=="all"){const last={};F.forEach((a,ix)=>{const k=a.sk+"#"+a.paper;if(T.mode==="first"?!(k in last):true)last[k]=ix;});
+    const keep=new Set(Object.values(last));F=F.filter((_,ix)=>keep.has(ix));}
+
+  const filt=`<div class="filters">
+   <div><label>Student</label><select onchange="tSet('stu',this.value)"><option value="all">All students (${T.list.length})</option>
+   ${T.list.map(s=>`<option value="${esc(s.sk)}" ${s.sk===T.stu?"selected":""}>${esc(s.name)}${s.roll?" · "+esc(s.roll):""}</option>`).join("")}</select></div>
+   <div><label>Count</label><select onchange="tSet('mode',this.value)">
+   <option value="first" ${T.mode==="first"?"selected":""}>First attempt of each paper</option>
+   <option value="latest" ${T.mode==="latest"?"selected":""}>Latest attempt of each paper</option>
+   <option value="all" ${T.mode==="all"?"selected":""}>All attempts (incl. retakes)</option></select></div></div>
+   <p class="muted small" style="margin:4px 0 0">"First attempt" shows real understanding best, because retakes are often remembered answers.</p>`;
+
+  if(!A.length)return top+`<div class="wrap"><div class="card empty"><div style="font-size:42px">📭</div><h2>No results yet</h2><div class="muted">Scores appear here as soon as students finish a paper. Share the quiz link with your students.</div></div></div>`;
+
+  const stuName=T.stu==="all"?"":`${esc(SM[T.stu].name)}${SM[T.stu].roll?" · "+esc(SM[T.stu].roll):""}`;
+  const cs=chapStats(F);const w=weakest(cs);
+  const tot=F.reduce((s,a)=>s+a.total,0),got=F.reduce((s,a)=>s+a.score,0);
+  const nStu=new Set(F.map(a=>a.sk)).size;
+
+  const stats=`<div class="stats">
+   ${T.stu==="all"?`<div class="stat"><span class="muted">Students</span><b>${nStu}</b></div>`:`<div class="stat"><span class="muted">Papers attempted</span><b>${new Set(F.map(a=>a.paper)).size} / ${NPAPERS}</b></div>`}
+   <div class="stat"><span class="muted">Tests counted</span><b>${F.length}</b></div>
+   <div class="stat"><span class="muted">Average score</span><b><span class="pct ${pctClass(pc(got,tot))}">${pc(got,tot)}%</span></b></div>
+   <div class="stat"><span class="muted">Weakest chapter</span><b style="font-size:17px;line-height:1.3">${w<0?"—":`Ch ${w+1} · ${esc(CHAPTERS[w])} <span class="pct ${pctClass(pc(cs[w].c,cs[w].n))}">(${pc(cs[w].c,cs[w].n)}%)</span>`}</b></div></div>`;
+
+  const chap=`<div class="card"><h2>Chapter-wise accuracy</h2><p class="muted small" style="margin-top:-6px">Share of questions answered correctly in each chapter. Below 50% needs re-teaching; 50–79% needs revision.</p>
+  <div class="tw"><table><thead><tr><th>Chapter</th><th>Answers</th><th>Correct</th><th style="width:30%"></th></tr></thead><tbody>
+  ${cs.map((s,i)=>{const p=pc(s.c,s.n);return `<tr><td><b>${i+1}.</b> ${esc(CHAPTERS[i])}${i===w?' <span class="tag warn">weakest</span>':""}</td><td>${s.n}</td><td>${s.n?`<span class="pct ${pctClass(p)}">${p}%</span>`:'<span class="muted">—</span>'}</td><td>${s.n?`<div class="hb"><i class="${pctClass(p)}" style="width:${p}%"></i></div>`:""}</td></tr>`;}).join("")}
+  </tbody></table></div></div>`;
+
+  const PS=Array.from({length:NPAPERS},()=>[]);F.forEach(a=>PS[a.paper-1].push(a));
+  const papers=`<div class="card"><h2>Paper-wise scores</h2><div class="tw"><table><thead><tr><th>Paper</th><th>Tests</th><th>Average</th><th>Highest</th><th>Lowest</th></tr></thead><tbody>
+  ${PS.map((l,i)=>{if(!l.length)return `<tr><td>Paper ${i+1}</td><td>0</td><td colspan="3" class="muted">Not attempted</td></tr>`;const sc=l.map(a=>a.score);const av=sc.reduce((x,y)=>x+y,0)/l.length;
+   return `<tr><td>Paper ${i+1}</td><td>${l.length}</td><td><span class="pct ${pctClass(pc(av,PER))}">${av.toFixed(1)} / ${PER}</span></td><td>${Math.max(...sc)}</td><td>${Math.min(...sc)}</td></tr>`;}).join("")}
+  </tbody></table></div></div>`;
+
+  // question stats
+  const QS={};
+  F.forEach(a=>PAPERS[a.paper-1].forEach((q,k)=>{const j=L.indexOf(a.ans[k]);const s=QS[q.id]||(QS[q.id]={q,n:0,c:0,pick:[0,0,0,0],skip:0});s.n++;if(j<0)s.skip++;else s.pick[j]++;if(j===q.ans)s.c++;}));
+  const QL=Object.values(QS).filter(s=>s.c<s.n).sort((a,b)=>a.c/a.n-b.c/b.n||b.n-a.n);
+  const showQ=T.allQ?QL:QL.slice(0,10);
+  const qcards=showQ.map(s=>{const q=s.q,[pi,k]=POS[q.id],p=pc(s.c,s.n);
+    let wj=-1;s.pick.forEach((v,j)=>{if(j!==q.ans&&v&&(wj<0||v>s.pick[wj]))wj=j;});
+    const wrong=wj>=0?`<div class="ans">Most common wrong answer: <span class="ya" style="color:var(--bad);font-weight:600">${L[wj]}. ${esc(q.opts[wj])}</span> <span class="muted">(${s.pick[wj]} of ${s.n})</span></div>`:"";
+    const skip=s.skip?`<div class="ans muted">Left unanswered: ${s.skip}</div>`:"";
+    return `<div class="hq ${pctClass(p)}"><div class="qhead"><span class="qn">Paper ${pi+1} · Q${k+1}</span><span class="chip">Ch ${q.ch} · ${esc(CHAPTERS[q.ch-1])}</span>
+    <span class="pct ${pctClass(p)}">${p}% correct</span><span class="muted small">(${s.c} of ${s.n})</span></div>
+    <div class="qtext">${esc(q.q)}</div><div class="ans">Correct answer: <span style="color:var(--ok);font-weight:600">${L[q.ans]}. ${esc(q.opts[q.ans])}</span></div>${wrong}${skip}</div>`;}).join("");
+  const hard=`<div class="card"><h2>Questions most often answered wrong</h2><p class="muted small" style="margin-top:-6px">Sorted from hardest to easiest. The most common wrong answer usually points to the misconception to clear up.</p>
+  ${QL.length?qcards+(QL.length>10?`<div style="text-align:center"><button class="btn ghost sm" onclick="tSet('allQ',${!T.allQ})">${T.allQ?"Show top 10 only":`Show all ${QL.length} questions`}</button></div>`:""):'<p class="muted">No wrong answers in this selection. 🎉</p>'}</div>`;
+
+  // students table / student attempts
+  let who="";
+  if(T.stu==="all"){
+    const rows=T.list.map((s,n)=>{const l=F.filter(a=>a.sk===s.sk);if(!l.length)return "";const t=l.reduce((x,a)=>x+a.total,0),g=l.reduce((x,a)=>x+a.score,0);const c2=chapStats(l),w2=weakest(c2);
+      return `<tr class="click" onclick="tPick(${n})"><td><b>${esc(s.name)}</b></td><td>${esc(s.roll)||'<span class="muted">—</span>'}</td><td>${new Set(l.map(a=>a.paper)).size} / ${NPAPERS}</td><td><span class="pct ${pctClass(pc(g,t))}">${pc(g,t)}%</span></td><td>${w2<0?"—":`Ch ${w2+1} <span class="muted small">(${pc(c2[w2].c,c2[w2].n)}%)</span>`}</td><td class="small">${fmtT(Math.max(...l.map(a=>a.t)))}</td></tr>`;}).join("");
+    who=`<div class="card"><h2>Students</h2><p class="muted small" style="margin-top:-6px">Click a student to see their own analysis.</p><div class="tw"><table><thead><tr><th>Name</th><th>Class/Roll</th><th>Papers</th><th>Average</th><th>Weakest</th><th>Last active</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  }else{
+    who=`<div class="card"><h2>Tests by ${stuName}</h2><div class="tw"><table><thead><tr><th>When</th><th>Paper</th><th>Score</th></tr></thead><tbody>
+    ${A.filter(a=>a.sk===T.stu).reverse().map(a=>`<tr><td class="small">${fmtT(a.t)}</td><td>Paper ${a.paper}</td><td><span class="pct ${pctClass(pc(a.score,a.total))}">${a.score} / ${a.total}</span></td></tr>`).join("")}</tbody></table></div></div>`;
+  }
+  const recent=T.stu==="all"?`<div class="card"><h2>Latest submissions</h2><div class="tw"><table><thead><tr><th>When</th><th>Student</th><th>Paper</th><th>Score</th></tr></thead><tbody>
+    ${A.slice(-15).reverse().map(a=>`<tr><td class="small">${fmtT(a.t)}</td><td>${esc(a.name)}${a.roll?` <span class="muted small">${esc(a.roll)}</span>`:""}</td><td>Paper ${a.paper}</td><td><span class="pct ${pctClass(pc(a.score,a.total))}">${a.score} / ${a.total}</span></td></tr>`).join("")}</tbody></table></div></div>`:"";
+
+  return top+`<div class="wrap">
+  <div class="row" style="justify-content:space-between"><div><h1>${T.stu==="all"?"Class overview":stuName}</h1><div class="muted">${A.length} submission${A.length===1?"":"s"} received · updated ${fmtT(Date.now())}</div></div>
+  ${T.stu==="all"?"":`<button class="btn ghost sm" onclick="tSet('stu','all')">← All students</button>`}</div>
+  ${filt}${F.length?stats+chap+hard+papers:'<div class="card muted">No tests in this selection.</div>'}${who}${recent}</div>`;
+}
+window.addEventListener("hashchange",()=>{if(location.hash==="#teacher"&&!T.rows&&RESULTS_URL&&tKeyGet())tLoad(tKeyGet());else{render();window.scrollTo(0,0);}});
+
 /* ---------- start ---------- */
 (function init(){
   try{const s=sessionStorage.getItem(APP+"_cur");if(s&&users().some(u=>u.name===s)){cur=s;loadData();view="dash";}}catch(e){}
-  render();
+  if(location.hash==="#teacher"&&RESULTS_URL&&tKeyGet())tLoad(tKeyGet());else render();
+  flush();
 })();
 </script>
 </body>
