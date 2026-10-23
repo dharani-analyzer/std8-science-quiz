@@ -15,8 +15,8 @@
 "use strict";
 const KEY="q8_tkey";
 const T={key:ls.get(KEY,""),d:null,tab:"analytics",err:"",
-  an:{paper:"all",cls:"all",mode:"first",stu:null,allQ:false,showMissing:false},
-  st:{cls:"all",q:""},edit:null};
+  an:{paper:"all",cls:"all",school:"all",board:"all",mode:"first",stu:null,allQ:false,showMissing:false},
+  st:{cls:"all",school:"all",board:"all",status:"all",q:""},edit:null};
 
 /* ---------- data ---------- */
 async function load(){
@@ -34,7 +34,10 @@ const fmtN=x=>{x=Math.round(x*100)/100;return x<0?"−"+(-x):String(x);};
 const negTxt=p=>Number(p.neg)?`+1 / −${Number(p.neg)}`:"No negative marks";
 const PM=()=>{const m={};(T.d?T.d.papers:[]).forEach(p=>m[p.id]=p);return m;};
 const SM=()=>{const m={};(T.d?T.d.students:[]).forEach(s=>m[s.id]=s);return m;};
-const activeStudents=()=>T.d.students.filter(s=>s.status!=="removed");
+const activeStudents=()=>T.d.students.filter(s=>s.status==="active");
+const schoolsSeen=()=>[...new Set(T.d.settings.schools.concat(T.d.students.filter(s=>s.status!=="removed").map(s=>s.school)))].filter(String).sort();
+const canSee=(s,p)=>!p.boards||!p.boards.length||!s.board||p.boards.includes(s.board);
+const boardTxt=p=>p.boards&&p.boards.length?p.boards.join(", "):"All boards";
 const classesSeen=()=>[...new Set(T.d.settings.classes.concat(activeStudents().map(s=>s.cls)))].filter(String).sort();
 const stuLabel=s=>s?`${esc(s.name)} <span class="muted small">${esc(s.cls)}-${esc(s.roll)}</span>`:'<span class="muted">Unknown student</span>';
 
@@ -42,11 +45,11 @@ const stuLabel=s=>s?`${esc(s.name)} <span class="muted small">${esc(s.cls)}-${es
 function header(){
   const tab=(k,l)=>`<button class="btn ghost sm ${T.tab===k&&!T.edit?"on":""}" onclick="go('${k}')">${l}</button>`;
   return `<header class="top"><div class="brand">📊 Teacher · ${esc(T.d.settings.title)}</div><div class="who">
-  ${tab("analytics","Analytics")}${tab("papers","Papers")}${tab("students","Students")}${tab("settings","Settings")}
+  ${tab("analytics","Analytics")}${tab("papers","Papers")}${tab("students","Students"+(T.d.students.some(s=>s.status==="pending")?` <span class="tag warn" style="padding:1px 7px">${T.d.students.filter(s=>s.status==="pending").length}</span>`:""))}${tab("settings","Settings")}
   <button class="btn ghost sm" onclick="load()">↻</button><button class="btn ghost sm" onclick="logout()">Log out</button></div></header>`;
 }
 let lastLoad=0;
-function go(t){T.tab=t;T.edit=null;if(t!=="analytics")T.an.stu=null;render();window.scrollTo(0,0);if(Date.now()-lastLoad>5000)load();}
+function go(t){T.tab=t;T.edit=null;if(t!=="analytics")T.an.stu=null;render();window.scrollTo(0,0);if(Date.now()-lastLoad>1500)load();}
 function logout(){ls.del(KEY);T.key="";T.d=null;render();}
 function render(keepModal){
   if(!keepModal)closeModal();let h;
@@ -70,6 +73,8 @@ function filtered(extra){
   let F=T.d.attempts.filter(x=>x.status==="submitted"&&pm[x.paperId]&&sm[x.sid]&&sm[x.sid].status!=="removed").sort((x,y)=>x.submitted-y.submitted);
   if(a.paper!=="all")F=F.filter(x=>x.paperId===a.paper);
   if(a.cls!=="all")F=F.filter(x=>sm[x.sid].cls===a.cls);
+  if(a.school!=="all")F=F.filter(x=>sm[x.sid].school===a.school);
+  if(a.board!=="all")F=F.filter(x=>sm[x.sid].board===a.board);
   if(extra)F=F.filter(extra);
   if(a.mode!=="all"){const pick={};F.forEach((x,i)=>{const k=x.sid+"#"+x.paperId;if(a.mode==="latest"||!(k in pick))pick[k]=i;});const keep=new Set(Object.values(pick));F=F.filter((_,i)=>keep.has(i));}
   return F;
@@ -107,11 +112,13 @@ function viewAnalytics(){
   const cls=classesSeen();
   const filt=`<div class="filters">
    <div><label>Paper</label><select onchange="setAn('paper',this.value)"><option value="all">All papers (${papers.length})</option>${papers.map(p=>`<option value="${p.id}" ${a.paper===p.id?"selected":""}>${esc(p.title)}</option>`).join("")}</select></div>
+   ${schoolsSeen().length>1?`<div><label>School</label><select onchange="setAn('school',this.value)"><option value="all">All schools</option>${schoolsSeen().map(c=>`<option ${a.school===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div>`:""}
+   ${T.d.settings.boards.length>1?`<div><label>Board</label><select onchange="setAn('board',this.value)"><option value="all">All boards</option>${T.d.settings.boards.map(c=>`<option ${a.board===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div>`:""}
    <div><label>Class</label><select onchange="setAn('cls',this.value)"><option value="all">All classes</option>${cls.map(c=>`<option ${a.cls===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div>
    <div><label>Count</label><select onchange="setAn('mode',this.value)"><option value="first" ${a.mode==="first"?"selected":""}>First attempt of each paper</option><option value="latest" ${a.mode==="latest"?"selected":""}>Latest attempt</option><option value="all" ${a.mode==="all"?"selected":""}>All attempts (incl. practice retakes)</option></select></div></div>`;
   if(a.stu)return viewStudentDetail(filt);
   const F=filtered();
-  const roster=activeStudents().filter(s=>a.cls==="all"||s.cls===a.cls);
+  const roster=activeStudents().filter(s=>(a.cls==="all"||s.cls===a.cls)&&(a.school==="all"||s.school===a.school)&&(a.board==="all"||s.board===a.board));
   if(!T.d.attempts.some(x=>x.status==="submitted"))return `<div class="wrap"><h1>Analytics</h1>${filt}<div class="card empty"><div style="font-size:42px">📭</div><h2>No submissions yet</h2><div class="muted">Results appear here as soon as students submit papers.${papers.length?"":" Start by adding a paper in the <b>Papers</b> tab."}</div></div></div>`;
   const got=F.reduce((s,x)=>s+x.score,0),tot=F.reduce((s,x)=>s+x.total,0),ts=topicStats(F),w=weakest(ts);
   const stats=`<div class="stats"><div class="stat"><span class="muted">Students${a.cls==="all"?"":" in "+esc(a.cls)}</span><b>${roster.length}</b></div>
@@ -122,21 +129,21 @@ function viewAnalytics(){
   if(a.paper!=="all"){
     const p=pm[a.paper],subIds=new Set(F.map(x=>x.sid));
     const inprog=new Set(T.d.attempts.filter(x=>x.paperId===p.id&&x.status==="started").map(x=>x.sid));
-    const missing=roster.filter(s=>!subIds.has(s.id));
+    const elig=roster.filter(s=>canSee(s,p)),missing=elig.filter(s=>!subIds.has(s.id));
     const buckets=[[-1e9,39.99,"Below 40%"],[40,59.99,"40–59%"],[60,79.99,"60–79%"],[80,100,"80% and above"]].map(([lo,hi,l])=>({l,n:F.filter(x=>{const v=x.total?x.score/x.total*100:0;return v>=lo&&v<=hi;}).length,lo}));
     const mx=Math.max(1,...buckets.map(b=>b.n));
     mid=`<div class="card"><div class="row between"><h2 style="margin:0">${esc(p.title)}</h2><div class="row">${modeTag(p)}${STATE_TAG[pState(p)]}</div></div>
     <p class="muted small">${p.questions.length} questions · ${negTxt(p)}${p.closes?` · closes ${fmtD(p.closes)}`:""}</p>
-    <div class="stats" style="margin:8px 0"><div class="stat"><span class="muted">Submitted</span><b>${subIds.size} / ${roster.length}</b></div>
+    <div class="stats" style="margin:8px 0"><div class="stat"><span class="muted">Submitted</span><b>${subIds.size} / ${elig.length}</b></div>
     <div class="stat"><span class="muted">In progress</span><b>${[...inprog].filter(id=>!subIds.has(id)).length}</b></div>
     <div class="stat"><span class="muted">Not attempted</span><b>${missing.length}</b></div></div>
     <h3 style="font-size:16px;margin:12px 0 8px">Score distribution</h3>
     <table>${buckets.map(b=>`<tr><td style="width:130px">${b.l}</td><td><div class="hb"><i class="${b.lo>=80?"ok":b.lo>=40?"warn":"bad"}" style="width:${b.n/mx*100}%"></i></div></td><td style="width:50px"><b>${b.n}</b></td></tr>`).join("")}</table>
     ${missing.length?`<p style="margin-bottom:0"><button class="btn ghost sm" onclick="setAn('showMissing',${!a.showMissing})">${a.showMissing?"Hide":"Show"} students who haven't submitted (${missing.length})</button></p>
-    ${a.showMissing?`<div class="chips" style="margin-top:10px">${missing.map(s=>`<span class="chip">${esc(s.name)} · ${esc(s.cls)}-${esc(s.roll)}${inprog.has(s.id)?" (in progress)":""}</span>`).join("")}</div>`:""}`:""}</div>`;
+    ${a.showMissing?`<div class="chips" style="margin-top:10px">${missing.map(s=>`<span class="chip">${esc(s.name)} · ${esc(s.cls)}-${esc(s.roll)}${schoolsSeen().length>1?" · "+esc(s.school):""}${inprog.has(s.id)?" (in progress)":""}</span>`).join("")}</div>`:""}`:""}</div>`;
   }else{
     const rows=papers.map(p=>{const l=F.filter(x=>x.paperId===p.id),sc=l.map(x=>x.score),n=new Set(l.map(x=>x.sid)).size,av=l.length?sc.reduce((s,v)=>s+v,0)/l.length:0;
-      return `<tr class="click" onclick="setAn('paper','${p.id}')"><td><b>${esc(p.title)}</b><div class="row" style="gap:4px;margin-top:2px">${modeTag(p)}${STATE_TAG[pState(p)]}</div></td><td>${n} / ${roster.length}</td>
+      return `<tr class="click" onclick="setAn('paper','${p.id}')"><td><b>${esc(p.title)}</b><div class="row" style="gap:4px;margin-top:2px">${modeTag(p)}${STATE_TAG[pState(p)]}</div></td><td>${n} / ${roster.filter(s=>canSee(s,p)).length}</td>
       <td>${l.length?`<span class="pct ${pctClass(pc(av,p.questions.length))}">${fmtN(+av.toFixed(1))} / ${p.questions.length}</span>`:'<span class="muted">—</span>'}</td><td>${l.length?fmtN(Math.max(...sc)):"—"}</td><td>${l.length?fmtN(Math.min(...sc)):"—"}</td></tr>`;}).join("");
     mid=`<div class="card"><h2>Papers</h2><p class="muted small" style="margin-top:-6px">Click a paper for its full analysis.</p><div class="tw"><table><thead><tr><th>Paper</th><th>Submitted</th><th>Average</th><th>High</th><th>Low</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
@@ -156,7 +163,7 @@ function viewStudentDetail(filt){
   const rows=all.map(x=>{const p=pm[x.paperId];return `<tr><td>${esc(p.title)} ${modeTag(p)}</td><td class="small">${x.status==="submitted"?fmtD(x.submitted):"started "+fmtD(x.started)}</td>
     <td>${x.status==="submitted"?`<span class="pct ${pctClass(pc(x.score,x.total))}">${fmtN(x.score)} / ${x.total}</span>${x.late?' <span class="tag bad">late</span>':""}<div class="muted small">✓${x.correct} ✗${x.wrong} skipped ${x.skipped}</div>`:'<span class="tag warn">In progress</span>'}</td>
     <td>${p.mode==="test"?`<button class="btn ghost sm" onclick="voidAttempt('${x.id}')">Allow retake</button>`:""}</td></tr>`;}).join("");
-  return `<div class="wrap"><div class="row between"><div><h1>${esc(s.name)}</h1><div class="muted">Class ${esc(s.cls)} · Roll no. ${esc(s.roll)} · registered ${fmtDay(s.registered)}</div></div>
+  return `<div class="wrap"><div class="row between"><div><h1>${esc(s.name)}</h1><div class="muted">${s.school?esc(s.school)+" · ":""}${s.board?esc(s.board)+" · ":""}Class ${esc(s.cls)} · Roll no. ${esc(s.roll)} · registered ${fmtDay(s.registered)} ${STATUS_TAG[s.status]||""}</div></div>
   <button class="btn ghost sm" onclick="T.an.stu=null;render()">← All students</button></div>${filt}
   <div class="stats"><div class="stat"><span class="muted">Papers submitted</span><b>${new Set(F.map(x=>x.paperId)).size}</b></div>
   <div class="stat"><span class="muted">Average score</span><b>${tot?`<span class="pct ${pctClass(pc(got,tot))}">${pc(got,tot)}%</span>`:"—"}</b></div></div>
@@ -181,7 +188,7 @@ function viewPapers(){
     return `<div class="pcard"><div class="pc-top"><h3>${esc(p.title)}</h3><div class="row" style="gap:4px">${modeTag(p)}${STATE_TAG[st]}</div></div>
     <div class="pc-meta">${p.questions.length} questions · ${[...new Set(p.questions.map(q=>q.topic))].length} topic(s) · ${negTxt(p)}${p.mode==="test"?` · answers shown ${p.reveal==="submit"?"after submitting":p.reveal==="close"?"after closing":"never"}`:""}</div>
     ${sched.length?`<div class="pc-meta">${sched.join(" · ")}</div>`:""}
-    <div class="pc-meta">Submitted by <b>${stu}</b> of ${n} students</div><div class="pc-btns">${act.join("")}</div></div>`;}).join("");
+    <div class="pc-meta">For <b>${esc(boardTxt(p))}</b> · submitted by <b>${stu}</b> of ${activeStudents().filter(s=>canSee(s,p)).length} students</div><div class="pc-btns">${act.join("")}</div></div>`;}).join("");
   const starter=!P.length?`<div class="card"><h2>Start with your existing papers?</h2><p class="muted">Add the original 10 Std 8 Science practice papers (200 questions, chapters 1–9) as open practice papers.</p>
     <button class="btn" onclick="importStarter()">Add the 10 practice papers</button></div>`:"";
   return `<div class="wrap"><div class="row between"><h1>Papers</h1><button class="btn" onclick="editPaper(null)">+ New paper</button></div>
@@ -189,7 +196,7 @@ function viewPapers(){
   ${P.length?`<div class="grid">${cards}</div>`:""}</div>`;
 }
 async function savePaper(p,qs){const r=await api("tSavePaper",{key:T.key,paper:p,questions:qs||undefined});return r.id;}
-function paperPayload(p,ch){return Object.assign({id:p.id,title:p.title,mode:p.mode,limit:p.limit,opens:p.opens,closes:p.closes,reveal:p.reveal,status:p.status,neg:p.neg},ch);}
+function paperPayload(p,ch){return Object.assign({id:p.id,title:p.title,mode:p.mode,limit:p.limit,opens:p.opens,closes:p.closes,reveal:p.reveal,status:p.status,neg:p.neg,boards:p.boards||[]},ch);}
 async function setStatus(id,status){const p=PM()[id];try{await savePaper(paperPayload(p,{status}));await load();}catch(e){notify(e.message);}}
 function reopen(id){const p=PM()[id];
   if(p.closes&&p.closes<now()){ask("This paper's closing date has passed. Reopen it and remove the closing date?","Reopen",async()=>{try{await savePaper(paperPayload(p,{status:"open",closes:0}));await load();}catch(e){notify(e.message);}});}
@@ -216,14 +223,15 @@ const toLocal=ms=>{if(!ms)return"";const d=new Date(ms-new Date(ms).getTimezoneO
 function editPaper(id){
   const p=id?PM()[id]:null;
   const used=p&&T.d.attempts.some(x=>x.paperId===p.id&&x.status!=="void");
-  T.edit=p?{id:p.id,title:p.title,mode:p.mode,limit:p.limit||30,opens:p.opens,closes:p.closes,reveal:p.reveal,status:p.status,neg:Number(p.neg)||0,questions:p.questions,changed:false,locked:used,errors:[],showAll:false}
-    :{id:null,title:"",mode:"practice",limit:30,opens:0,closes:0,reveal:"submit",status:"draft",neg:0.5,questions:[],changed:false,locked:false,errors:[],showAll:false};
+  T.edit=p?{id:p.id,title:p.title,mode:p.mode,limit:p.limit||30,opens:p.opens,closes:p.closes,reveal:p.reveal,status:p.status,neg:Number(p.neg)||0,boards:(p.boards||[]).slice(),questions:p.questions,changed:false,locked:used,errors:[],showAll:false}
+    :{id:null,title:"",mode:"practice",limit:30,opens:0,closes:0,reveal:"submit",status:"draft",neg:0.5,boards:[],questions:[],changed:false,locked:false,errors:[],showAll:false};
   render();window.scrollTo(0,0);
 }
 function ed(k,v){T.edit[k]=v;render();}
 function readForm(){const e=T.edit,v=id=>{const el=$(id);return el?el.value:"";};
   e.title=v("#eTitle").trim();e.mode=v("#eMode");if($("#eLimit"))e.limit=Number(v("#eLimit"))||0;if($("#eReveal"))e.reveal=v("#eReveal");
-  e.neg=Number(v("#eNeg"))||0;e.opens=v("#eOpens")?new Date(v("#eOpens")).getTime():0;e.closes=v("#eCloses")?new Date(v("#eCloses")).getTime():0;e.status=v("#eStatus");}
+  e.neg=Number(v("#eNeg"))||0;
+  if(document.querySelector(".eBoard")){const ch=[...document.querySelectorAll(".eBoard:checked")].map(x=>x.value);e.boards=ch.length===T.d.settings.boards.length?[]:ch;}e.opens=v("#eOpens")?new Date(v("#eOpens")).getTime():0;e.closes=v("#eCloses")?new Date(v("#eCloses")).getTime():0;e.status=v("#eStatus");}
 function viewEditor(){
   const e=T.edit,qs=e.questions,topics=[...new Set(qs.map(q=>q.topic))];
   const show=e.showAll?qs:qs.slice(0,8);
@@ -246,6 +254,8 @@ function viewEditor(){
   <div class="grid2"><div><label>Type</label><select id="eMode" onchange="readForm();render()"><option value="practice" ${!test?"selected":""}>Practice – instant answers, unlimited retakes</option><option value="test" ${test?"selected":""}>Test – one attempt, no answers during the test</option></select></div>
   ${test?`<div><label>Time limit (minutes, 0 = no limit)</label><input type="number" id="eLimit" min="0" max="600" value="${e.limit}"></div>`:"<div></div>"}</div>
   ${test?`<label>Show correct answers to students</label><select id="eReveal"><option value="submit" ${e.reveal==="submit"?"selected":""}>Right after they submit</option><option value="close" ${e.reveal==="close"?"selected":""}>After the test closes</option><option value="never" ${e.reveal==="never"?"selected":""}>Never (score only)</option></select>`:""}
+  <label>Board(s) <span class="muted small">(students only see papers for their board)</span></label>
+  <div class="row" style="gap:16px;margin:6px 0 14px">${T.d.settings.boards.map(b=>`<label class="row" style="gap:6px;font-weight:500;display:flex"><input type="checkbox" class="eBoard" value="${esc(b)}" ${!e.boards.length||e.boards.includes(b)?"checked":""} style="width:18px;height:18px;margin:0"> ${esc(b)}</label>`).join("")}</div>
   <label>Marking</label><select id="eNeg">${[[0.5,"+1 correct, −0.5 wrong, 0 skipped"],[0.25,"+1 correct, −0.25 wrong, 0 skipped"],[1,"+1 correct, −1 wrong, 0 skipped"],[0,"+1 correct, no negative marks"]].map(([v,l])=>`<option value="${v}" ${Number(e.neg)===v?"selected":""}>${l}</option>`).join("")}</select>
   <div class="grid2"><div><label>Opens <span class="muted small">(optional)</span></label><input type="datetime-local" id="eOpens" value="${toLocal(e.opens)}"></div>
   <div><label>Closes <span class="muted small">(optional)</span></label><input type="datetime-local" id="eCloses" value="${toLocal(e.closes)}"></div></div>
@@ -259,6 +269,7 @@ async function saveEditor(){
   if(!e.title)return notify("Please give the paper a title.");
   if(!e.questions.length)return notify("Please upload the questions first.");
   if(e.opens&&e.closes&&e.closes<=e.opens)return notify("The closing time must be after the opening time.");
+  if(document.querySelector(".eBoard")&&!document.querySelector(".eBoard:checked"))return notify("Please tick at least one board.");
   try{await savePaper(paperPayload(e),e.changed?e.questions:null);T.edit=null;T.tab="papers";await load();}
   catch(x){notify(x.message);}
 }
@@ -315,45 +326,68 @@ function parseRows(rows){
 }
 
 /* ================= STUDENTS ================= */
+const STATUS_TAG={active:'<span class="tag ok">Active</span>',blocked:'<span class="tag bad">Blocked</span>',pending:'<span class="tag warn">Pending</span>'};
 function viewStudents(){
-  const st=T.st,pm=PM(),cls=classesSeen();
+  const st=T.st,pm=PM(),cls=classesSeen(),schools=schoolsSeen(),boards=T.d.settings.boards;
   const subs=T.d.attempts.filter(x=>x.status==="submitted"&&pm[x.paperId]);
-  const list=activeStudents().filter(s=>(st.cls==="all"||s.cls===st.cls)&&(!st.q||(s.name+" "+s.roll).toLowerCase().includes(st.q.toLowerCase())))
-    .sort((a,b)=>a.cls.localeCompare(b.cls)||a.roll.localeCompare(b.roll,undefined,{numeric:true}));
+  const pend=T.d.students.filter(s=>s.status==="pending").sort((a,b)=>a.registered-b.registered);
+  const pendCard=pend.length?`<div class="card" style="border-color:#e0a100"><div class="row between"><h2 style="margin:0">Waiting for approval (${pend.length})</h2>
+    <button class="btn sm" onclick="setStu(${JSON.stringify(pend.map(s=>s.id)).replace(/"/g,"&quot;")},'active')">Approve all</button></div>
+    <p class="muted small">Check that each name, school and roll no. looks right. Rejected sign-ups are removed, and that roll no. can register again.</p>
+    <div class="tw"><table><thead><tr><th>Name</th><th>School</th><th>Board</th><th>Class-Roll</th><th>Signed up</th><th></th></tr></thead><tbody>
+    ${pend.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.school)||"—"}</td><td>${esc(s.board)||"—"}</td><td>${esc(s.cls)}-${esc(s.roll)}</td><td class="small">${fmtD(s.registered)}</td>
+    <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" onclick="setStu(['${s.id}'],'active')">Approve</button><button class="btn danger sm" onclick="setStu(['${s.id}'],'removed')">Reject</button></div></td></tr>`).join("")}
+    </tbody></table></div></div>`:"";
+  const q=st.q.toLowerCase();
+  const list=T.d.students.filter(s=>(s.status==="active"||s.status==="blocked")&&(st.status==="all"||s.status===st.status)&&(st.school==="all"||s.school===st.school)&&(st.board==="all"||s.board===st.board)&&(st.cls==="all"||s.cls===st.cls)&&(!q||(s.name+" "+s.roll+" "+s.school).toLowerCase().includes(q)))
+    .sort((a,b)=>a.school.localeCompare(b.school)||a.cls.localeCompare(b.cls)||a.roll.localeCompare(b.roll,undefined,{numeric:true}));
   const rows=list.map(s=>{const l=subs.filter(x=>x.sid===s.id),g=l.reduce((t,x)=>t+x.score,0),n=l.reduce((t,x)=>t+x.total,0);
-    return `<tr><td><a href="#" onclick="T.an.stu='${s.id}';go('analytics');T.an.stu='${s.id}';render();return false"><b>${esc(s.name)}</b></a></td><td>${esc(s.cls)}</td><td>${esc(s.roll)}</td><td>${new Set(l.map(x=>x.paperId)).size}</td>
-    <td>${n?`<span class="pct ${pctClass(pc(g,n))}">${pc(g,n)}%</span>`:'<span class="muted">—</span>'}</td><td class="small">${s.lastLogin?fmtD(s.lastLogin):"—"}</td>
-    <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn ghost sm" onclick="resetPin('${s.id}')">Reset PIN</button><button class="btn danger sm" onclick="removeStu('${s.id}')">Remove</button></div></td></tr>`;}).join("");
-  return `<div class="wrap"><h1>Students</h1><p class="muted">${activeStudents().length} registered. Students register themselves with the class code <b>${esc(T.d.settings.classCode)}</b> (see Settings).</p>
-  <div class="filters"><div><label>Class</label><select onchange="T.st.cls=this.value;render()"><option value="all">All classes</option>${cls.map(c=>`<option ${st.cls===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div>
+    return `<tr><td><a href="#" onclick="openStudent('${s.id}');return false"><b>${esc(s.name)}</b></a></td><td class="small">${esc(s.school)||"—"}</td><td class="small">${esc(s.board)||"—"}</td><td>${esc(s.cls)}-${esc(s.roll)}</td><td>${new Set(l.map(x=>x.paperId)).size}</td>
+    <td>${n?`<span class="pct ${pctClass(pc(g,n))}">${pc(g,n)}%</span>`:'<span class="muted">—</span>'}</td><td>${STATUS_TAG[s.status]}</td>
+    <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn ghost sm" onclick="resetPin('${s.id}')">Reset PIN</button>
+    ${s.status==="blocked"?`<button class="btn ghost sm" onclick="setStu(['${s.id}'],'active')">Unblock</button>`:`<button class="btn ghost sm" onclick="blockStu('${s.id}')">Block</button>`}
+    <button class="btn danger sm" onclick="removeStu('${s.id}')">Remove</button></div></td></tr>`;}).join("");
+  const sel=(k,all,opts)=>`<select onchange="T.st.${k}=this.value;render()"><option value="all">${all}</option>${opts.map(o=>`<option ${st[k]===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  const nAct=T.d.students.filter(s=>s.status==="active").length,nBl=T.d.students.filter(s=>s.status==="blocked").length;
+  return `<div class="wrap"><h1>Students</h1><p class="muted">${nAct} active${nBl?` · ${nBl} blocked`:""}${pend.length?` · ${pend.length} waiting for approval`:""}. Students register with the class code <b>${esc(T.d.settings.classCode)}</b>.
+  ${T.d.settings.approval?"New sign-ups need your approval.":"New sign-ups can log in straight away (approval is off in Settings)."}</p>
+  ${pendCard}
+  <div class="filters"><div><label>Status</label><select onchange="T.st.status=this.value;render()"><option value="all">Active &amp; blocked</option><option value="active" ${st.status==="active"?"selected":""}>Active</option><option value="blocked" ${st.status==="blocked"?"selected":""}>Blocked</option></select></div>
+  <div><label>School</label>${sel("school","All schools",schools)}</div><div><label>Board</label>${sel("board","All boards",boards)}</div><div><label>Class</label>${sel("cls","All classes",cls)}</div>
   <div><label>Search</label><input type="text" id="sq" value="${esc(st.q)}" placeholder="Name or roll no." oninput="T.st.q=this.value;clearTimeout(window._sq);window._sq=setTimeout(()=>{render();const i=$('#sq');i.focus();i.setSelectionRange(i.value.length,i.value.length);},300)" style="margin-bottom:0"></div></div>
-  <div class="card" style="margin-top:14px">${list.length?`<div class="tw"><table><thead><tr><th>Name</th><th>Class</th><th>Roll</th><th>Papers</th><th>Average</th><th>Last login</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<p class="muted">No students found.</p>'}</div></div>`;
+  <div class="card" style="margin-top:14px">${list.length?`<div class="tw"><table><thead><tr><th>Name</th><th>School</th><th>Board</th><th>Class-Roll</th><th>Papers</th><th>Average</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<p class="muted">No students found.</p>'}</div></div>`;
 }
+function openStudent(id){T.tab="analytics";T.edit=null;T.an.stu=id;render();window.scrollTo(0,0);}
+async function setStu(ids,status){try{await api("tSetStudent",{key:T.key,ids,status});await load();}catch(e){notify(e.message);}}
+function blockStu(id){const s=SM()[id];ask(`Block ${s.name} (${s.cls}-${s.roll})? They'll be logged out and can't log in until you unblock them. Their results are kept.`,"Block",()=>setStu([id],"blocked"),true);}
 function resetPin(id){const s=SM()[id];
-  modal(`<h2>Reset PIN for ${esc(s.name)}</h2><p class="muted small">Class ${esc(s.cls)}, roll no. ${esc(s.roll)}. Tell the student their new PIN. They'll be logged out on other devices.</p>
+  modal(`<h2>Reset PIN for ${esc(s.name)}</h2><p class="muted small">${esc(s.school)} · class ${esc(s.cls)}, roll no. ${esc(s.roll)}. Tell the student their new PIN. They'll be logged out on other devices.</p>
   <input type="text" id="np" maxlength="4" inputmode="numeric" placeholder="New 4-digit PIN" style="text-align:center;font-size:20px"><div class="err" id="npErr"></div>
   <div class="row"><button class="btn" onclick="doResetPin('${id}')">Set PIN</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`);
   setTimeout(()=>$("#np").focus(),0);}
 async function doResetPin(id){const pin=$("#np").value.trim();if(!/^\d{4}$/.test(pin)){$("#npErr").textContent="PIN must be exactly 4 digits.";return;}
   try{await api("tResetPin",{key:T.key,studentId:id,pin});closeModal();notify("PIN changed to "+pin+".");}catch(e){$("#npErr").textContent=e.message;}}
-function removeStu(id){const s=SM()[id];ask(`Remove ${s.name} (${s.cls}-${s.roll})? They won't be able to log in, and their results are hidden from analytics. Their roll no. becomes free to register again.`,"Remove",async()=>{try{await api("tSetStudent",{key:T.key,studentId:id,status:"removed"});await load();}catch(e){notify(e.message);}},true);}
+function removeStu(id){const s=SM()[id];ask(`Remove ${s.name} (${s.cls}-${s.roll})? They won't be able to log in, and their results are hidden from analytics. Their roll no. becomes free to register again. (To keep their results, use Block instead.)`,"Remove",()=>setStu([id],"removed"),true);}
 
 /* ================= SETTINGS ================= */
 function viewSettings(){
   const s=T.d.settings,link=location.href.replace(/teacher\.html.*$/,"");
-  const msg=`${s.title} tests: open ${link} → tap "New student" → class code ${s.classCode}. Use your class, roll no. and a 4-digit PIN you'll remember.`;
+  const msg=`${s.title} tests: open ${link} → tap "New student" → class code ${s.classCode}. Choose your school and board, and use your class, roll no. and a 4-digit PIN you'll remember.${s.approval?" Your teacher will approve your account before you can log in.":""}`;
   return `<div class="wrap narrow"><h1>Settings</h1>
   <div class="card"><h2>Share with students</h2><label>Student link</label><div class="copy">${esc(link)}</div>
   <label style="margin-top:12px">Message you can send</label><div class="copy" id="shareMsg">${esc(msg)}</div>
   <button class="btn ghost sm" style="margin-top:10px" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('shareMsg').textContent).then(()=>this.textContent='Copied ✓')">Copy message</button></div>
-  <div class="card"><h2>Class settings</h2>
-  <label>Title shown to students</label><input type="text" id="sTitle" maxlength="60" value="${esc(s.title)}">
+  <div class="card"><h2>Registration</h2>
+  <label class="row" style="gap:8px;margin-bottom:12px"><input type="checkbox" id="sAppr" ${s.approval?"checked":""} style="width:18px;height:18px"> New students need my approval before they can log in</label>
   <label>Class code <span class="muted small">(students need it to register; change it to stop new sign-ups)</span></label><input type="text" id="sCode" maxlength="20" value="${esc(s.classCode)}">
-  <label>Classes <span class="muted small">(comma-separated, e.g. 8A, 8B, 8C – students pick from this list. Leave empty to let them type it.)</span></label><input type="text" id="sCls" value="${esc(s.classes.join(", "))}">
+  <label>Schools <span class="muted small">(one per line – students pick from this list. Leave empty to let them type it.)</span></label><textarea id="sSchools" style="min-height:90px;font-family:inherit;font-size:15px" placeholder="e.g. Sunrise English School, Pune">${esc(s.schools.join("\n"))}</textarea>
+  <label>Boards <span class="muted small">(one per line)</span></label><textarea id="sBoards" style="min-height:90px;font-family:inherit;font-size:15px">${esc(s.boards.join("\n"))}</textarea>
+  <label>Classes <span class="muted small">(comma-separated, e.g. 8A, 8B, 8C – leave empty to let students type it)</span></label><input type="text" id="sCls" value="${esc(s.classes.join(", "))}">
+  <label>Title shown to students</label><input type="text" id="sTitle" maxlength="60" value="${esc(s.title)}">
   <div class="err" id="sErr"></div><button class="btn" onclick="saveSettings()">Save settings</button></div></div>`;
 }
 async function saveSettings(){
-  try{const r=await api("tSettings",{key:T.key,title:$("#sTitle").value,classCode:$("#sCode").value,classes:$("#sCls").value});T.d.settings=r.settings;render();notify("Settings saved.");}
+  try{const r=await api("tSettings",{key:T.key,title:$("#sTitle").value,classCode:$("#sCode").value,classes:$("#sCls").value,schools:$("#sSchools").value,boards:$("#sBoards").value,approval:$("#sAppr").checked});T.d.settings=r.settings;render();notify("Settings saved.");}
   catch(e){$("#sErr").textContent=e.message;}
 }
 

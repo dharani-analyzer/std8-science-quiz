@@ -26,7 +26,7 @@ function saveProg(p){ls.set(progKey(S.paper.id),p);}
 
 /* ---------- start-up ---------- */
 async function boot(){
-  if(S.token){try{await loadHome();flushOutbox();return;}catch(e){if(e.server){ls.del(TOKEN);S.token=null;}else{S.err=e.message;}}}
+  if(S.token){try{await loadHome();flushOutbox();return;}catch(e){if(e.server){ls.del(TOKEN);S.token=null;}S.err=e.message;}}
   await showLogin();
 }
 async function showLogin(){
@@ -46,29 +46,44 @@ function header(){
   ${S.view!=="home"?`<button class="btn ghost sm" onclick="goHome()">My papers</button>`:""}
   <button class="btn ghost sm" onclick="logout()">Log out</button></div></header>`;
 }
-function clsField(id){
-  const c=S.info&&S.info.classes||[];
-  return c.length?`<select id="${id}"><option value="">Choose…</option>${c.map(x=>`<option>${esc(x)}</option>`).join("")}</select>`
-    :`<input type="text" id="${id}" maxlength="10" placeholder="e.g. 8A">`;
+const LAST="q8_last";
+function authFail(e){
+  if(e&&e.server&&/log in again|blocked|approval/i.test(e.message)){stopTimer();ls.del(TOKEN);S.token=null;S.student=null;S.err=e.message;S.tab="login";showLogin();return true;}
+  return false;
 }
+function listField(id,list,ph,max,val){
+  val=val||"";
+  return list.length?`<select id="${id}"><option value="">Choose…</option>${list.map(x=>`<option ${x===val?"selected":""}>${esc(x)}</option>`).join("")}</select>`
+    :`<input type="text" id="${id}" maxlength="${max}" placeholder="${esc(ph)}" value="${esc(val)}">`;
+}
+const clsField=(id,v)=>listField(id,S.info&&S.info.classes||[],"e.g. 8A",10,v);
+const schoolField=(id,v)=>{const l=S.info&&S.info.schools||[];return listField(id,l,"Your school's name",80,v||(l.length===1?l[0]:""));};
+const boardField=id=>{const l=S.info&&S.info.boards||[];return listField(id,l,"e.g. CBSE",60,l.length===1?l[0]:"");};
 function viewLogin(){
-  const login=`<label>Class</label>${clsField("lCls")}
-    <label>Roll no.</label><input type="text" id="lRoll" maxlength="10" inputmode="numeric">
+  const last=ls.get(LAST,{});
+  if(S.pendingMsg)return `<div class="wrap narrow"><div class="hero"><div class="logo">⏳</div><h1>Account created</h1></div>
+  <div class="card"><p>Thanks! Your teacher needs to <b>approve your account</b> before you can log in. Please check back later.</p>
+  <p class="muted small">Remember your school, class, roll no. and PIN. You'll need them to log in.</p>
+  <button class="btn" onclick="S.pendingMsg=false;S.tab='login';render()">Go to log in</button></div></div>`;
+  const login=`<label>School</label>${schoolField("lSchool",last.school)}
+    <div class="grid2"><div><label>Class</label>${clsField("lCls",last.cls)}</div><div><label>Roll no.</label><input type="text" id="lRoll" maxlength="10" inputmode="numeric"></div></div>
     <label>4-digit PIN</label><input type="password" id="lPin" maxlength="4" inputmode="numeric" onkeydown="if(event.key==='Enter')doLogin()">
     <div class="err" id="err">${esc(S.err)}</div><button class="btn" onclick="doLogin()">Log in</button>
     <p class="muted small">Forgot your PIN? Ask your teacher to reset it.</p>`;
   const reg=`<label>Class code <span class="muted small">(from your teacher)</span></label><input type="text" id="rCode" maxlength="20" autocapitalize="characters">
     <label>Your name</label><input type="text" id="rName" maxlength="40" placeholder="e.g. Aarav Patil">
+    <label>School</label>${schoolField("rSchool")}
+    <label>Board</label>${boardField("rBoard")}
     <div class="grid2"><div><label>Class</label>${clsField("rCls")}</div><div><label>Roll no.</label><input type="text" id="rRoll" maxlength="10" inputmode="numeric"></div></div>
     <div class="grid2"><div><label>Choose a 4-digit PIN</label><input type="password" id="rPin" maxlength="4" inputmode="numeric"></div>
     <div><label>Confirm PIN</label><input type="password" id="rPin2" maxlength="4" inputmode="numeric" onkeydown="if(event.key==='Enter')doRegister()"></div></div>
     <div class="err" id="err">${esc(S.err)}</div><button class="btn" onclick="doRegister()">Create my account</button>
-    <p class="muted small">Remember your class, roll no. and PIN. You'll use them to log in on any phone or computer.</p>`;
+    <p class="muted small">Remember your school, class, roll no. and PIN. You'll use them to log in on any phone or computer.</p>`;
   return `<div class="wrap narrow"><div class="hero"><div class="logo">🔬</div><h1>${esc(S.title)} – Tests &amp; Practice</h1></div>
   <div class="card"><div class="tabs"><button class="${S.tab==="login"?"on":""}" onclick="S.tab='login';S.err='';render()">Log in</button>
   <button class="${S.tab==="reg"?"on":""}" onclick="S.tab='reg';S.err='';render()">New student</button></div>
   ${S.tab==="login"?login:reg}</div>
-  <p class="muted small" style="text-align:center">Your name, class, roll no. and answers are shared with your teacher.</p>
+  <p class="muted small" style="text-align:center">Your name, school, class, roll no. and answers are shared with your teacher.</p>
   <div class="foot"><a href="teacher.html">Teacher page</a></div></div>`;
 }
 function pState(p){
@@ -179,21 +194,26 @@ function render(){
 
 /* ---------- actions ---------- */
 async function doLogin(){
-  const cls=$("#lCls").value.trim(),roll=$("#lRoll").value.trim(),pin=$("#lPin").value.trim();
-  if(!cls||!roll||!pin){$("#err").textContent="Please fill in class, roll no. and PIN.";return;}
-  try{const r=await api("login",{cls,roll,pin});S.token=r.token;ls.set(TOKEN,r.token);await loadHome();flushOutbox();}
+  const school=$("#lSchool").value.trim(),cls=$("#lCls").value.trim(),roll=$("#lRoll").value.trim(),pin=$("#lPin").value.trim();
+  if(!school||!cls||!roll||!pin){$("#err").textContent="Please fill in school, class, roll no. and PIN.";return;}
+  ls.set(LAST,{school,cls});
+  try{const r=await api("login",{school,cls,roll,pin});S.token=r.token;ls.set(TOKEN,r.token);S.err="";await loadHome();flushOutbox();}
   catch(e){$("#err").textContent=e.message;}
 }
 async function doRegister(){
   const v=id=>$(id).value.trim();const p1=v("#rPin"),p2=v("#rPin2");
   if(!/^\d{4}$/.test(p1)){$("#err").textContent="PIN must be exactly 4 digits.";return;}
   if(p1!==p2){$("#err").textContent="The two PINs don't match.";return;}
-  try{const r=await api("register",{code:v("#rCode"),name:v("#rName"),cls:v("#rCls"),roll:v("#rRoll"),pin:p1});
+  if(!v("#rSchool")){$("#err").textContent="Please choose your school.";return;}
+  if(!v("#rBoard")){$("#err").textContent="Please choose your board.";return;}
+  try{const r=await api("register",{code:v("#rCode"),name:v("#rName"),school:v("#rSchool"),board:v("#rBoard"),cls:v("#rCls"),roll:v("#rRoll"),pin:p1});
+    ls.set(LAST,{school:v("#rSchool"),cls:v("#rCls")});
+    if(r.pending){S.pendingMsg=true;S.err="";render();window.scrollTo(0,0);return;}
     S.token=r.token;ls.set(TOKEN,r.token);await loadHome();}
   catch(e){$("#err").textContent=e.message;}
 }
 function logout(){stopTimer();ls.del(TOKEN);S.token=null;S.student=null;S.tab="login";S.err="";showLogin();}
-function goHome(){stopTimer();S.view="home";render();window.scrollTo(0,0);loadHome().catch(()=>{});}
+function goHome(){stopTimer();S.view="home";render();window.scrollTo(0,0);loadHome().catch(authFail);}
 function confirmTest(pid){
   const p=S.papers.find(x=>x.id===pid);
   ask(`Start "${p.title}" now? You get one attempt${p.limit?` and ${p.limit} minutes. The timer keeps running even if you close the page`:""}.`,"Start test",()=>openPaper(pid));
@@ -207,7 +227,7 @@ async function openPaper(pid){
     else if(!pr||!pr.aid||pr.n!==S.qs.length)pr={aid:Date.now().toString(36)+Math.random().toString(36).slice(2,8),started:Date.now(),n:S.qs.length,answers:{}};
     saveProg(pr);
     S.view="paper";render();window.scrollTo(0,0);startTimer();
-  }catch(e){notify(e.message);if(e.server)loadHome().catch(()=>{});}
+  }catch(e){if(authFail(e))return;notify(e.message);if(e.server)loadHome().catch(()=>{});}
 }
 function pick(k,j){
   const pr=prog();if(!pr)return;
@@ -234,7 +254,7 @@ async function submit(){
   }catch(e){
     if(e.offline){const box=ls.get(OUTBOX,[]);box.push(payload);ls.set(OUTBOX,box);ls.del(progKey(S.paper.id));
       S.view="home";render();notify("You're offline. Your answers are saved on this device and will be sent to your teacher automatically when you're back online.");}
-    else{notify(e.message);if(S.paper.mode==="test")startTimer();}
+    else if(!authFail(e)){notify(e.message);if(S.paper.mode==="test")startTimer();}
   }finally{submitting=false;}
 }
 function topicRows(r){
